@@ -1,0 +1,41 @@
+{
+  "model": "IsolationForest",
+  "precision": 0.2205,
+  "recall": 0.224,
+  "f1": 0.2222,
+  "roc_auc": 0.8746,
+  "true_positives": 43,
+  "false_positives": 152,
+  "true_negatives": 7415,
+  "false_negatives": 149,
+  "false_positive_rate": 0.0201,
+  "per_attack_detection": {
+    "privilege_escalation": {
+      "total_windows": 4,
+      "detected": 4,
+      "detection_rate": 1.0
+    },
+    "data_exfiltration": {
+      "total_windows": 138,
+      "detected": 29,
+      "detection_rate": 0.21014492753623187
+    },
+    "insider_threat": {
+      "total_windows": 6,
+      "detected": 3,
+      "detection_rate": 0.5
+    },
+    "reconnaissance": {
+      "total_windows": 41,
+      "detected": 4,
+      "detection_rate": 0.0975609756097561
+    },
+    "backdoor_creation": {
+      "total_windows": 3,
+      "detected": 3,
+      "detection_rate": 1.0
+    }
+  },
+  "contamination": 0.02,
+  "n_estimators": 200
+}

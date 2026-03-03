@@ -1,0 +1,512 @@
+[
+  {
+    "service_name": "S3",
+    "service_id": "S3",
+    "security_sensitivity": "High",
+    "description": "Simple Storage Service - Object storage for files, backups, data lakes, and static websites",
+    "api_operations": [
+      "ListBuckets",
+      "ListObjectsV2",
+      "GetObject",
+      "PutObject",
+      "DeleteObject",
+      "DeleteBucket",
+      "CreateBucket",
+      "HeadObject",
+      "HeadBucket",
+      "CopyObject",
+      "GetBucketLocation",
+      "GetBucketVersioning"
+    ],
+    "sensitive_operations": [
+      "PutBucketPolicy",
+      "PutBucketAcl",
+      "DeleteBucket",
+      "DeleteBucketPolicy",
+      "PutPublicAccessBlock",
+      "PutBucketVersioning"
+    ],
+    "detection_focus": [
+      "Mass GetObject operations (>100 in 5 min)",
+      "Bucket policy modifications allowing external access",
+      "Public access configuration changes",
+      "Data transfer volume anomalies (>10GB)",
+      "Access from unfamiliar IPs or geolocations",
+      "Deletion of versioning or logging configurations"
+    ],
+    "related_techniques": ["T1530", "T1537", "T1619", "T1485"],
+    "response_actions": [
+      "Block public access on buckets",
+      "Enable MFA delete",
+      "Apply restrictive bucket policies",
+      "Enable versioning for object recovery",
+      "Implement S3 Object Lock for immutability"
+    ]
+  },
+  {
+    "service_name": "IAM",
+    "service_id": "IAM",
+    "security_sensitivity": "Critical",
+    "description": "Identity and Access Management - User authentication, authorization, and access control",
+    "api_operations": [
+      "ListUsers",
+      "ListRoles",
+      "ListPolicies",
+      "GetUser",
+      "GetRole",
+      "GetPolicy",
+      "GetAccountAuthorizationDetails",
+      "GetCallerIdentity",
+      "ListAccessKeys",
+      "ListAttachedUserPolicies",
+      "ListAttachedRolePolicies",
+      "AssumeRole",
+      "GetSessionToken",
+      "GetFederationToken"
+    ],
+    "sensitive_operations": [
+      "CreateUser",
+      "CreateRole",
+      "CreateAccessKey",
+      "AttachUserPolicy",
+      "AttachRolePolicy",
+      "PutUserPolicy",
+      "PutRolePolicy",
+      "AddUserToGroup",
+      "UpdateAssumeRolePolicy",
+      "DeactivateMFADevice",
+      "DeleteVirtualMFADevice",
+      "UpdateSAMLProvider",
+      "DeleteUser",
+      "DeleteRole"
+    ],
+    "detection_focus": [
+      "ConsoleLogin without MFA",
+      "Administrative policy attachments (AdministratorAccess)",
+      "Access key creation outside provisioning process",
+      "AssumeRole from unfamiliar external accounts",
+      "MFA device deactivation",
+      "Trust policy modifications on roles",
+      "Root account usage",
+      "Privilege escalation patterns",
+      "User/role creation outside IaC"
+    ],
+    "related_techniques": ["T1078", "T1098", "T1136", "T1199", "T1556", "T1110"],
+    "response_actions": [
+      "Deactivate compromised access keys",
+      "Detach administrative policies",
+      "Reset user passwords with MFA requirement",
+      "Revert trust policy changes",
+      "Delete unauthorized IAM entities",
+      "Revoke active sessions"
+    ]
+  },
+  {
+    "service_name": "EC2",
+    "service_id": "EC2",
+    "security_sensitivity": "High",
+    "description": "Elastic Compute Cloud - Virtual servers for running applications",
+    "api_operations": [
+      "DescribeInstances",
+      "DescribeSecurityGroups",
+      "DescribeVolumes",
+      "DescribeSnapshots",
+      "DescribeImages",
+      "RunInstances",
+      "StopInstances",
+      "StartInstances",
+      "TerminateInstances",
+      "CreateSnapshot",
+      "CreateImage",
+      "DescribeNetworkInterfaces"
+    ],
+    "sensitive_operations": [
+      "AuthorizeSecurityGroupIngress",
+      "RevokeSecurityGroupIngress",
+      "ModifyInstanceAttribute",
+      "TerminateInstances",
+      "ModifySnapshotAttribute",
+      "ModifyImageAttribute",
+      "DeleteSecurityGroup",
+      "DeleteSnapshot",
+      "DeleteVolume",
+      "StopInstances"
+    ],
+    "detection_focus": [
+      "Security group rules allowing 0.0.0.0/0 on SSH/RDP",
+      "Unexpected instance terminations",
+      "Snapshot sharing with external accounts",
+      "AMI sharing publicly or with unknown accounts",
+      "Instance metadata service abuse",
+      "Instance launches from unusual AMIs",
+      "Security group deletions",
+      "Configuration changes bypassing change management"
+    ],
+    "related_techniques": ["T1578", "T1537", "T1528", "T1485"],
+    "response_actions": [
+      "Revoke risky security group rules",
+      "Apply restrictive NACLs to subnets",
+      "Isolate compromised instances",
+      "Terminate malicious instances",
+      "Restore from clean snapshots",
+      "Remove external snapshot sharing"
+    ]
+  },
+  {
+    "service_name": "Lambda",
+    "service_id": "LAMBDA",
+    "security_sensitivity": "High",
+    "description": "Serverless compute service for running code without managing servers",
+    "api_operations": [
+      "ListFunctions",
+      "GetFunction",
+      "GetFunctionConfiguration",
+      "ListEventSourceMappings",
+      "GetPolicy",
+      "ListVersionsByFunction",
+      "GetAlias",
+      "Invoke"
+    ],
+    "sensitive_operations": [
+      "CreateFunction",
+      "UpdateFunctionCode",
+      "UpdateFunctionConfiguration",
+      "AddPermission",
+      "RemovePermission",
+      "DeleteFunction",
+      "PutFunctionConcurrency",
+      "UpdateFunctionEventInvokeConfig"
+    ],
+    "detection_focus": [
+      "Function creation from unusual principals",
+      "Resource-based policies allowing external accounts",
+      "Function code modifications",
+      "High invocation rates from unfamiliar sources",
+      "Environment variable containing credentials",
+      "Functions with overly permissive IAM roles",
+      "Function deletions"
+    ],
+    "related_techniques": ["T1537", "T1078", "T1528"],
+    "response_actions": [
+      "Remove external invocation permissions",
+      "Delete malicious functions",
+      "Revoke overly permissive IAM role policies",
+      "Restore functions from previous versions",
+      "Implement function URL authentication"
+    ]
+  },
+  {
+    "service_name": "RDS",
+    "service_id": "RDS",
+    "security_sensitivity": "High",
+    "description": "Relational Database Service - Managed SQL databases (MySQL, PostgreSQL, etc.)",
+    "api_operations": [
+      "DescribeDBInstances",
+      "DescribeDBSnapshots",
+      "DescribeDBClusterSnapshots",
+      "DescribeDBClusters",
+      "ListTagsForResource",
+      "DescribeDBParameterGroups",
+      "DescribeDBSubnetGroups"
+    ],
+    "sensitive_operations": [
+      "CreateDBSnapshot",
+      "DeleteDBInstance",
+      "DeleteDBSnapshot",
+      "ModifyDBInstance",
+      "ModifyDBSnapshotAttribute",
+      "RestoreDBInstanceFromSnapshot",
+      "StopDBInstance",
+      "RebootDBInstance"
+    ],
+    "detection_focus": [
+      "Snapshot sharing with external accounts",
+      "Public accessibility modifications",
+      "Database instance deletions",
+      "Snapshot deletions (potential data loss)",
+      "Security group changes on DB instances",
+      "Unencrypted snapshot creation",
+      "Database parameter modifications"
+    ],
+    "related_techniques": ["T1537", "T1485"],
+    "response_actions": [
+      "Revoke external snapshot sharing",
+      "Delete exposed snapshots",
+      "Restore databases from secure backups",
+      "Disable public accessibility",
+      "Re-encrypt snapshots with KMS"
+    ]
+  },
+  {
+    "service_name": "KMS",
+    "service_id": "KMS",
+    "security_sensitivity": "Critical",
+    "description": "Key Management Service - Encryption key management",
+    "api_operations": [
+      "ListKeys",
+      "ListAliases",
+      "DescribeKey",
+      "GetKeyPolicy",
+      "GetKeyRotationStatus",
+      "Decrypt",
+      "Encrypt",
+      "GenerateDataKey"
+    ],
+    "sensitive_operations": [
+      "CreateKey",
+      "DeleteAlias",
+      "DisableKey",
+      "ScheduleKeyDeletion",
+      "PutKeyPolicy",
+      "CancelKeyDeletion",
+      "EnableKeyRotation",
+      "DisableKeyRotation"
+    ],
+    "detection_focus": [
+      "Key disabling or deletion schedules",
+      "Key policy modifications allowing external accounts",
+      "Excessive Decrypt operations",
+      "Key rotation disabling",
+      "Unusual encryption/decryption volumes",
+      "Key policy changes granting wildcard permissions"
+    ],
+    "related_techniques": ["T1485", "T1078"],
+    "response_actions": [
+      "Cancel key deletions",
+      "Re-enable disabled keys",
+      "Revert key policy to baseline",
+      "Rotate potentially compromised keys",
+      "Audit resources using compromised keys"
+    ]
+  },
+  {
+    "service_name": "CloudTrail",
+    "service_id": "CLOUDTRAIL",
+    "security_sensitivity": "Critical",
+    "description": "AWS API call logging and monitoring service",
+    "api_operations": [
+      "LookupEvents",
+      "DescribeTrails",
+      "GetTrailStatus",
+      "GetEventSelectors",
+      "ListTrails"
+    ],
+    "sensitive_operations": [
+      "StopLogging",
+      "DeleteTrail",
+      "UpdateTrail",
+      "PutEventSelectors",
+      "RemoveTags"
+    ],
+    "detection_focus": [
+      "Logging being stopped or disabled",
+      "Trail deletions",
+      "Event selectors changed to exclude events",
+      "S3 bucket changes where logs are stored",
+      "Log file validation disabled"
+    ],
+    "related_techniques": ["T1562"],
+    "response_actions": [
+      "Re-enable stopped trails",
+      "Recreate deleted trails",
+      "Restore event selectors to capture all events",
+      "Lock CloudTrail S3 bucket with Object Lock",
+      "Enable log file validation"
+    ]
+  },
+  {
+    "service_name": "EKS",
+    "service_id": "EKS",
+    "security_sensitivity": "High",
+    "description": "Elastic Kubernetes Service - Managed Kubernetes clusters",
+    "api_operations": [
+      "ListClusters",
+      "DescribeCluster",
+      "ListNodegroups",
+      "DescribeNodegroup",
+      "ListFargateProfiles",
+      "DescribeFargateProfile"
+    ],
+    "sensitive_operations": [
+      "CreateCluster",
+      "DeleteCluster",
+      "UpdateClusterConfig",
+      "DeleteNodegroup",
+      "CreateFargateProfile",
+      "UpdateNodegroupConfig"
+    ],
+    "detection_focus": [
+      "Cluster deletions",
+      "Public endpoint access enabling",
+      "Node group scaling changes",
+      "RBAC policy modifications",
+      "Unauthorized pod executions",
+      "Service account token abuse"
+    ],
+    "related_techniques": ["T1078", "T1485", "T1528"],
+    "response_actions": [
+      "Disable public cluster endpoints",
+      "Restore cluster configurations",
+      "Audit Kubernetes RBAC policies",
+      "Rotate service account tokens",
+      "Isolate compromised node groups"
+    ]
+  },
+  {
+    "service_name": "SecretsManager",
+    "service_id": "SECRETS_MANAGER",
+    "security_sensitivity": "High",
+    "description": "Secrets Management - Store and rotate credentials, API keys, and secrets",
+    "api_operations": [
+      "ListSecrets",
+      "DescribeSecret",
+      "GetSecretValue",
+      "GetResourcePolicy",
+      "ListSecretVersionIds"
+    ],
+    "sensitive_operations": [
+      "CreateSecret",
+      "DeleteSecret",
+      "GetSecretValue",
+      "PutSecretValue",
+      "UpdateSecret",
+      "PutResourcePolicy",
+      "RemoveRegionsFromReplication",
+      "RestoreSecret"
+    ],
+    "detection_focus": [
+      "High volume GetSecretValue calls",
+      "Secret deletions",
+      "Resource policy changes allowing external access",
+      "Secret value retrievals from unfamiliar sources",
+      "Rotation configuration disabling",
+      "Secret exports to unusual locations"
+    ],
+    "related_techniques": ["T1078", "T1528", "T1485"],
+    "response_actions": [
+      "Rotate compromised secrets immediately",
+      "Restore deleted secrets from recovery window",
+      "Revert resource policies to deny external access",
+      "Audit all resources using compromised secrets",
+      "Enable automatic rotation"
+    ]
+  },
+  {
+    "service_name": "DynamoDB",
+    "service_id": "DYNAMODB",
+    "security_sensitivity": "High",
+    "description": "NoSQL database service for key-value and document data",
+    "api_operations": [
+      "ListTables",
+      "DescribeTable",
+      "Scan",
+      "Query",
+      "GetItem",
+      "BatchGetItem",
+      "DescribeBackup",
+      "ListBackups"
+    ],
+    "sensitive_operations": [
+      "DeleteTable",
+      "DeleteItem",
+      "BatchWriteItem",
+      "UpdateTable",
+      "DeleteBackup",
+      "RestoreTableFromBackup",
+      "CreateBackup"
+    ],
+    "detection_focus": [
+      "Table deletions",
+      "Mass data deletion (DeleteItem at scale)",
+      "Backup deletions",
+      "Excessive Scan operations (data exfiltration)",
+      "Point-in-time recovery disabling",
+      "Table exports to S3 from unusual accounts"
+    ],
+    "related_techniques": ["T1485", "T1530"],
+    "response_actions": [
+      "Restore tables from backups",
+      "Enable point-in-time recovery",
+      "Apply resource-based policies",
+      "Rate limit access to tables",
+      "Audit backup retention policies"
+    ]
+  },
+  {
+    "service_name": "CloudFormation",
+    "service_id": "CLOUDFORMATION",
+    "security_sensitivity": "High",
+    "description": "Infrastructure as Code - Provision AWS resources using templates",
+    "api_operations": [
+      "ListStacks",
+      "DescribeStacks",
+      "DescribeStackResources",
+      "DescribeStackEvents",
+      "GetTemplate",
+      "ListStackResources"
+    ],
+    "sensitive_operations": [
+      "CreateStack",
+      "DeleteStack",
+      "UpdateStack",
+      "CreateChangeSet",
+      "ExecuteChangeSet",
+      "SetStackPolicy"
+    ],
+    "detection_focus": [
+      "Stack deletions (infrastructure destruction)",
+      "Stack creations with high privilege IAM roles",
+      "Template modifications introducing backdoors",
+      "Stack policy changes",
+      "Unauthorized changeset executions",
+      "Nested stack manipulations"
+    ],
+    "related_techniques": ["T1485", "T1078"],
+    "response_actions": [
+      "Rollback malicious stack changes",
+      "Delete attacker-created stacks",
+      "Restore stacks from drift detection",
+      "Apply stack policies preventing deletion",
+      "Audit IAM roles used by stacks"
+    ]
+  },
+  {
+    "service_name": "GuardDuty",
+    "service_id": "GUARDDUTY",
+    "security_sensitivity": "Critical",
+    "description": "Threat detection service for AWS accounts and workloads",
+    "api_operations": [
+      "ListDetectors",
+      "GetDetector",
+      "ListFindings",
+      "GetFindings",
+      "ListMembers",
+      "GetMemberDetectors"
+    ],
+    "sensitive_operations": [
+      "DeleteDetector",
+      "UpdateDetector",
+      "DisassociateMembers",
+      "DeleteMembers",
+      "CreateFilter",
+      "DeleteFilter",
+      "ArchiveFindings"
+    ],
+    "detection_focus": [
+      "GuardDuty detector deletion or disabling",
+      "Finding suppressions or archiving",
+      "Member account disassociation",
+      "Threat intelligence feed disabling",
+      "S3 protection disabling",
+      "Kubernetes audit log analysis disabling"
+    ],
+    "related_techniques": ["T1562"],
+    "response_actions": [
+      "Re-enable GuardDuty detectors",
+      "Restore archived findings",
+      "Re-associate member accounts",
+      "Remove malicious finding filters",
+      "Enable all protection plans"
+    ]
+  }
+]

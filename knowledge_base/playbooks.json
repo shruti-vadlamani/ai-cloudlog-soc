@@ -1,0 +1,966 @@
+[
+  {
+    "playbook_id": "IR-IAM-001",
+    "name": "Compromised Credentials - Initial Response",
+    "incident_types": ["Credential Compromise", "Unauthorized Access", "Brute Force Success"],
+    "prerequisites": ["CloudTrail enabled and logging", "AWS CLI configured", "Incident response IAM role"],
+    "techniques_addressed": ["T1078", "T1110"],
+    "triage_questions": [
+      "What is the source IP address of the suspicious login?",
+      "Has this user logged in from this geographic location before?",
+      "What resources did the user access immediately after authentication?",
+      "Were there any failed login attempts from the same IP before success?",
+      "What time did the suspicious activity begin and does it match user's normal working hours?"
+    ],
+    "related_playbooks": ["IR-IAM-002", "IR-IAM-004", "IR-ENUM-001"],
+    "response_phases": {
+      "detection": [
+        "Monitor GuardDuty findings for UnauthorizedAccess:IAMUser",
+        "Check for impossible travel or TOR exit node logins",
+        "Review failed authentication attempts followed by success",
+        "Verify MFA status and unusual login patterns"
+      ],
+      "analysis": [
+        {
+          "step": "Identify compromised identity",
+          "cli": "aws sts get-caller-identity"
+        },
+        {
+          "step": "Review all API calls by compromised credentials",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<COMPROMISED_USER> --start-time <TIME> --max-items 200"
+        },
+        {
+          "step": "Check for access key usage",
+          "cli": "aws iam list-access-keys --user-name <COMPROMISED_USER>"
+        },
+        {
+          "step": "Identify affected resources and permissions",
+          "cli": "aws iam list-attached-user-policies --user-name <COMPROMISED_USER>"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Disable all access keys immediately",
+          "cli": "aws iam update-access-key --user-name <COMPROMISED_USER> --access-key-id <AKIA...> --status Inactive",
+          "priority": "Critical"
+        },
+        {
+          "action": "Reset console password and force MFA",
+          "cli": "aws iam update-login-profile --user-name <COMPROMISED_USER> --password <RANDOM_STRONG> --password-reset-required",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke all active sessions",
+          "cli": "aws iam attach-user-policy --user-name <COMPROMISED_USER> --policy-arn arn:aws:iam::aws:policy/AWSDenyAll",
+          "priority": "Critical"
+        },
+        {
+          "action": "Block source IP in AWS WAF or Security Groups",
+          "cli": "aws wafv2 update-ip-set --name BlockedIPs --id <ID> --scope REGIONAL --addresses <MALICIOUS_IP>/32",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Delete unauthorized access keys",
+          "cli": "aws iam delete-access-key --user-name <COMPROMISED_USER> --access-key-id <AKIA...>"
+        },
+        {
+          "action": "Remove unauthorized policy attachments",
+          "cli": "aws iam detach-user-policy --user-name <COMPROMISED_USER> --policy-arn <UNAUTHORIZED_POLICY_ARN>"
+        },
+        {
+          "action": "Delete resources created by attacker",
+          "cli": "aws ec2 terminate-instances --instance-ids <MALICIOUS_INSTANCES>"
+        },
+        {
+          "action": "Remove backdoor IAM users if created",
+          "cli": "aws iam delete-user --user-name <BACKDOOR_USER>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Generate new access keys with rotation",
+          "cli": "aws iam create-access-key --user-name <COMPROMISED_USER>"
+        },
+        {
+          "action": "Re-enable MFA enforcement",
+          "cli": "aws iam enable-mfa-device --user-name <COMPROMISED_USER> --serial-number <MFA_ARN> --authentication-code-1 <CODE1> --authentication-code-2 <CODE2>"
+        },
+        {
+          "action": "Restore legitimate policies",
+          "cli": "aws iam attach-user-policy --user-name <COMPROMISED_USER> --policy-arn <LEGITIMATE_POLICY>"
+        },
+        {
+          "action": "Monitor for 72 hours post-incident",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<COMPROMISED_USER> --start-time <NOW>"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-IAM-002",
+    "name": "IAM Privilege Escalation Response",
+    "incident_types": ["Privilege Escalation", "Account Manipulation", "Persistence"],
+    "prerequisites": ["CloudTrail enabled", "Config enabled for IAM tracking", "SCPs in place"],
+    "techniques_addressed": ["T1098", "T1136", "T1199"],
+    "triage_questions": [
+      "What IAM permissions were added or modified during the incident window?",
+      "Which user performed the privilege escalation actions?",
+      "Were any new IAM users roles or policies created?",
+      "What is the timeline of IAM write events leading to elevated privileges?",
+      "Has the user who escalated privileges accessed sensitive resources afterward?"
+    ],
+    "related_playbooks": ["IR-IAM-001", "IR-IAM-003"],
+    "response_phases": {
+      "detection": [
+        "Alert on AttachUserPolicy/AttachRolePolicy with AdministratorAccess",
+        "Monitor CreateAccessKey events",
+        "Track UpdateAssumeRolePolicy modifications",
+        "Watch for privilege grants outside change windows"
+      ],
+      "analysis": [
+        {
+          "step": "Identify who made privilege change",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AttachUserPolicy --max-items 50"
+        },
+        {
+          "step": "Review current user permissions",
+          "cli": "aws iam get-user-policy --user-name <TARGET_USER> --policy-name <POLICY>"
+        },
+        {
+          "step": "List all attached policies",
+          "cli": "aws iam list-attached-user-policies --user-name <TARGET_USER>"
+        },
+        {
+          "step": "Check for newly created access keys",
+          "cli": "aws iam list-access-keys --user-name <TARGET_USER>"
+        },
+        {
+          "step": "Review AWS Config timeline for IAM changes",
+          "cli": "aws configservice get-resource-config-history --resource-type AWS::IAM::User --resource-id <TARGET_USER> --limit 20"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Immediately detach administrative policies",
+          "cli": "aws iam detach-user-policy --user-name <TARGET_USER> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess",
+          "priority": "Critical"
+        },
+        {
+          "action": "Deactivate suspicious access keys",
+          "cli": "aws iam update-access-key --user-name <TARGET_USER> --access-key-id <AKIA...> --status Inactive",
+          "priority": "Critical"
+        },
+        {
+          "action": "Apply deny-all policy temporarily",
+          "cli": "aws iam put-user-policy --user-name <TARGET_USER> --policy-name EmergencyDeny --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"*\",\"Resource\":\"*\"}]}'",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke assumed role sessions if applicable",
+          "cli": "aws iam update-role --role-name <ROLE> --max-session-duration 3600",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Delete all unauthorized access keys",
+          "cli": "aws iam delete-access-key --user-name <TARGET_USER> --access-key-id <AKIA...>"
+        },
+        {
+          "action": "Remove inline policies added by attacker",
+          "cli": "aws iam delete-user-policy --user-name <TARGET_USER> --policy-name <MALICIOUS_POLICY>"
+        },
+        {
+          "action": "Revert trust policy changes on roles",
+          "cli": "aws iam update-assume-role-policy --role-name <ROLE> --policy-document file://original-trust-policy.json"
+        },
+        {
+          "action": "Delete backdoor IAM users",
+          "cli": "aws iam delete-login-profile --user-name <BACKDOOR_USER>; aws iam delete-user --user-name <BACKDOOR_USER>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore legitimate permissions from baseline",
+          "cli": "aws iam attach-user-policy --user-name <TARGET_USER> --policy-arn <BASELINE_POLICY_ARN>"
+        },
+        {
+          "action": "Enable enhanced monitoring",
+          "cli": "aws cloudtrail put-event-selectors --trail-name main --event-selectors ReadWriteType=All,IncludeManagementEvents=true"
+        },
+        {
+          "action": "Implement SCPs to prevent recurrence",
+          "cli": "aws organizations attach-policy --policy-id <PREVENTIVE_SCP> --target-id <OU_ID>"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-IAM-003",
+    "name": "MFA Tampering / Authentication Bypass",
+    "incident_types": ["MFA Deactivation", "Authentication Process Modification"],
+    "prerequisites": ["CloudTrail enabled", "MFA enforcement policies", "IAM audit logs"],
+    "techniques_addressed": ["T1556"],
+    "triage_questions": [
+      "Which MFA device was deactivated or deleted?",
+      "Who performed the MFA deactivation action?",
+      "Has the affected user account been accessed after MFA removal?",
+      "Were there any subsequent authentication attempts without MFA?",
+      "What other IAM security changes occurred around the same time?"
+    ],
+    "related_playbooks": ["IR-IAM-001", "IR-IAM-002"],
+    "response_phases": {
+      "detection": [
+        "Alert on DeactivateMFADevice events",
+        "Monitor DeleteVirtualMFADevice calls",
+        "Track UpdateSAMLProvider modifications",
+        "Watch for MFA policy changes"
+      ],
+      "analysis": [
+        {
+          "step": "Identify who deactivated MFA",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=DeactivateMFADevice"
+        },
+        {
+          "step": "Check MFA status for affected users",
+          "cli": "aws iam list-mfa-devices --user-name <AFFECTED_USER>"
+        },
+        {
+          "step": "Review subsequent login attempts",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin --start-time <AFTER_DEACTIVATION>"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Force logout and disable console access",
+          "cli": "aws iam delete-login-profile --user-name <AFFECTED_USER>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Deactivate all access keys",
+          "cli": "aws iam update-access-key --user-name <AFFECTED_USER> --access-key-id <AKIA...> --status Inactive",
+          "priority": "Critical"
+        },
+        {
+          "action": "Apply temporary deny-all policy",
+          "cli": "aws iam put-user-policy --user-name <AFFECTED_USER> --policy-name EmergencyBlock --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"*\",\"Resource\":\"*\"}]}'",
+          "priority": "Critical"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Investigate if attacker obtained access",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<AFFECTED_USER> --start-time <AFTER_MFA_REMOVAL>"
+        },
+        {
+          "action": "Remove any unauthorized changes made during window",
+          "cli": "# Review and revert specific changes based on analysis"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Re-enable MFA with new device",
+          "cli": "aws iam create-virtual-mfa-device --virtual-mfa-device-name <USER>-mfa --outfile /tmp/qr-code.png --bootstrap-method QRCodePNG"
+        },
+        {
+          "action": "Enable MFA device for user",
+          "cli": "aws iam enable-mfa-device --user-name <AFFECTED_USER> --serial-number <MFA_ARN> --authentication-code-1 <CODE1> --authentication-code-2 <CODE2>"
+        },
+        {
+          "action": "Restore console access with forced MFA",
+          "cli": "aws iam create-login-profile --user-name <AFFECTED_USER> --password <TEMP_PASSWORD> --password-reset-required"
+        },
+        {
+          "action": "Enforce MFA via IAM policy",
+          "cli": "aws iam put-user-policy --user-name <AFFECTED_USER> --policy-name ForceMFA --policy-document file://force-mfa-policy.json"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-IAM-004",
+    "name": "Root Account Compromise",
+    "incident_types": ["Root Account Usage", "Highest Privilege Compromise"],
+    "prerequisites": ["CloudTrail in separate account", "Root account MFA", "AWS Support access"],
+    "techniques_addressed": ["T1078"],
+    "triage_questions": [
+      "What is the user's typical geographic login location?",
+      "What is the distance and time difference between the two login locations?",
+      "Are both sessions still active or has one terminated?",
+      "What resources were accessed from each geographic location?",
+      "Does the UserAgent string differ between the two sessions?"
+    ],
+    "related_playbooks": ["IR-IAM-001", "IR-IAM-003"],
+    "response_phases": {
+      "detection": [
+        "Alert on any root account API calls",
+        "Monitor root account console logins",
+        "Track root account access key usage (should not exist)",
+        "GuardDuty alerts for root account activity"
+      ],
+      "analysis": [
+        {
+          "step": "Review all root account activity",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=UserIdentity.Type,AttributeValue=Root --max-items 100"
+        },
+        {
+          "step": "Check for root access keys (should be none)",
+          "cli": "aws iam get-account-summary | grep AccountAccessKeysPresent"
+        },
+        {
+          "step": "Verify MFA devices on root",
+          "cli": "aws iam list-virtual-mfa-devices"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Delete root account access keys immediately",
+          "cli": "# Must use root account console to delete keys at https://console.aws.amazon.com/iam/home#/security_credentials",
+          "priority": "Critical"
+        },
+        {
+          "action": "Change root account password",
+          "cli": "# Use AWS Console password reset: https://signin.aws.amazon.com/forgot",
+          "priority": "Critical"
+        },
+        {
+          "action": "Contact AWS Support for emergency lockdown",
+          "cli": "# Open critical security ticket via AWS Support Center",
+          "priority": "Critical"
+        },
+        {
+          "action": "Enable CloudTrail log file validation if not enabled",
+          "cli": "aws cloudtrail update-trail --name <TRAIL> --enable-log-file-validation",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Review and revert all changes made by root",
+          "cli": "# Manually review CloudTrail for root actions and revert"
+        },
+        {
+          "action": "Rotate all IAM user credentials as precaution",
+          "cli": "# Script to rotate all user keys"
+        },
+        {
+          "action": "Check for billing changes or resource creation",
+          "cli": "aws ce get-cost-and-usage --time-period Start=<DATE>,End=<DATE> --granularity DAILY --metrics BlendedCost"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Set up new hardware MFA for root account",
+          "cli": "# Use AWS Console to configure hardware MFA device"
+        },
+        {
+          "action": "Document root account credentials in secure offline storage",
+          "cli": "# Store in physical safe with executive access only"
+        },
+        {
+          "action": "Implement Service Control Policies to restrict root",
+          "cli": "aws organizations attach-policy --policy-id <ROOT_RESTRICTION_SCP> --target-id <ROOT_OU>"
+        },
+        {
+          "action": "Set up GuardDuty for continuous monitoring",
+          "cli": "aws guardduty create-detector --enable --finding-publishing-frequency FIFTEEN_MINUTES"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-S3-001",
+    "name": "S3 Data Exfiltration Response",
+    "incident_types": ["Data Breach", "Mass Data Download", "Unauthorized Data Access"],
+    "prerequisites": ["S3 Data Events enabled in CloudTrail", "S3 Access Logging", "GuardDuty S3 Protection"],
+    "techniques_addressed": ["T1530", "T1619"],    "triage_questions": [
+      "Which S3 buckets experienced unusual GetObject activity?",
+      "What is the total data volume transferred during the incident window?",
+      "Is the source IP address associated with known cloud services or VPNs?",
+      "Does the user normally access this S3 bucket with this volume?",
+      "Were any bucket policies or ACLs modified before the data access?"
+    ],
+    "related_playbooks": ["IR-S3-002", "IR-DATA-001"],    "response_phases": {
+      "detection": [
+        "GuardDuty finding: Exfiltration:S3/ObjectRead.Unusual",
+        "High volume GetObject requests in short time",
+        "CloudWatch Alarm for S3 data transfer out",
+        "Unusual source IPs accessing sensitive buckets"
+      ],
+      "analysis": [
+        {
+          "step": "Identify which buckets were accessed",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=GetObject --max-items 500"
+        },
+        {
+          "step": "Check total objects accessed by suspect identity",
+          "cli": "aws s3api list-objects-v2 --bucket <BUCKET> --query 'Contents[?LastModified>=`<TIMESTAMP>`]'"
+        },
+        {
+          "step": "Review S3 access logs for detailed timeline",
+          "cli": "aws s3 cp s3://<LOG_BUCKET>/<PREFIX>/ . --recursive; grep <SUSPECT_IP> *.log"
+        },
+        {
+          "step": "Determine data sensitivity and volume",
+          "cli": "aws s3 ls s3://<BUCKET>/<PREFIX> --recursive --summarize"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Block public access immediately if enabled",
+          "cli": "aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+          "priority": "Critical"
+        },
+        {
+          "action": "Apply deny bucket policy to suspect principal",
+          "cli": "aws s3api put-bucket-policy --bucket <BUCKET> --policy '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"<SUSPECT_ARN>\"},\"Action\":\"s3:*\",\"Resource\":\"arn:aws:s3:::<BUCKET>/*\"}]}'",
+          "priority": "Critical"
+        },
+        {
+          "action": "Deactivate compromised credentials",
+          "cli": "aws iam update-access-key --user-name <SUSPECT_USER> --access-key-id <AKIA...> --status Inactive",
+          "priority": "Critical"
+        },
+        {
+          "action": "Enable MFA delete if not already set",
+          "cli": "aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled,MFADelete=Enabled --mfa '<MFA_SERIAL> <MFA_CODE>'",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Delete compromised access keys permanently",
+          "cli": "aws iam delete-access-key --user-name <SUSPECT_USER> --access-key-id <AKIA...>"
+        },
+        {
+          "action": "Review and remove any bucket policy backdoors",
+          "cli": "aws s3api get-bucket-policy --bucket <BUCKET>; aws s3api delete-bucket-policy --bucket <BUCKET>"
+        },
+        {
+          "action": "Remove ACLs granting external access",
+          "cli": "aws s3api put-bucket-acl --bucket <BUCKET> --acl private"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore secure bucket policy",
+          "cli": "aws s3api put-bucket-policy --bucket <BUCKET> --policy file://secure-bucket-policy.json"
+        },
+        {
+          "action": "Enable S3 Object Lock for critical data",
+          "cli": "aws s3api put-object-lock-configuration --bucket <BUCKET> --object-lock-configuration ObjectLockEnabled=Enabled,Rule={DefaultRetention={Mode=GOVERNANCE,Days=30}}"
+        },
+        {
+          "action": "Implement S3 Access Points for granular control",
+          "cli": "aws s3control create-access-point --account-id <ACCOUNT> --name secure-ap --bucket <BUCKET> --vpc-configuration VpcId=<VPC>"
+        },
+        {
+          "action": "Enable CloudWatch metrics for ongoing monitoring",
+          "cli": "aws s3api put-bucket-metrics-configuration --bucket <BUCKET> --id EntireBucket --metrics-configuration Id=EntireBucket"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-S3-002",
+    "name": "S3 Bucket Policy Tampering Response",
+    "incident_types": ["Bucket Exposure", "Data Sharing to External Accounts", "Persistence via Policy"],
+    "prerequisites": ["CloudTrail enabled", "S3 bucket versioning", "AWS Config S3 bucket logging"],
+    "techniques_addressed": ["T1537"],
+    "triage_questions": [
+      "What bucket policy changes were made and by whom?",
+      "Was the bucket made public or shared with external AWS accounts?",
+      "Has there been any GetObject activity from external IPs after the policy change?",
+      "What sensitive data classification does this bucket contain?",
+      "Were there any PutBucketPolicy or PutBucketAcl events before suspicious access?"
+    ],
+    "related_playbooks": ["IR-S3-001", "IR-DATA-001"],
+    "response_phases": {
+      "detection": [
+        "Alert on PutBucketPolicy events",
+        "Monitor PutBucketAcl with public grants",
+        "AWS Config rule: s3-bucket-public-read-prohibited",
+        "GuardDuty: Policy:S3/BucketAnonymousAccessGranted"
+      ],
+      "analysis": [
+        {
+          "step": "Identify modified bucket policies",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=PutBucketPolicy --max-items 100"
+        },
+        {
+          "step": "Review current bucket policy",
+          "cli": "aws s3api get-bucket-policy --bucket <BUCKET> --output text > current-policy.json"
+        },
+        {
+          "step": "Check for external account IDs",
+          "cli": "cat current-policy.json | jq '.Statement[] | select(.Principal.AWS | type == \"array\" or type == \"string\") | .Principal.AWS'"
+        },
+        {
+          "step": "Verify bucket ACL for public access",
+          "cli": "aws s3api get-bucket-acl --bucket <BUCKET>"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Delete risky bucket policy immediately",
+          "cli": "aws s3api delete-bucket-policy --bucket <BUCKET>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Block all public access",
+          "cli": "aws s3api put-public-access-block --bucket <BUCKET> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke external account access",
+          "cli": "aws s3api put-bucket-acl --bucket <BUCKET> --acl private",
+          "priority": "Critical"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Review CloudTrail for other modified buckets",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=PutBucketPolicy --start-time <DATE> | jq '.Events[] | .CloudTrailEvent | fromjson | .requestParameters.bucketName' | sort -u"
+        },
+        {
+          "action": "Disable compromised credentials",
+          "cli": "aws iam delete-access-key --user-name <ATTACKER_USER> --access-key-id <AKIA...>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore approved bucket policy from baseline",
+          "cli": "aws s3api put-bucket-policy --bucket <BUCKET> --policy file://baseline-bucket-policy.json"
+        },
+        {
+          "action": "Enable S3 Bucket Keys for encryption",
+          "cli": "aws s3api put-bucket-encryption --bucket <BUCKET> --server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"<KMS_KEY>\"}}]}'"
+        },
+        {
+          "action": "Implement SCPs to prevent public buckets org-wide",
+          "cli": "aws organizations attach-policy --policy-id <PREVENT_PUBLIC_S3_SCP> --target-id <ROOT_OU>"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-EC2-001",
+    "name": "Security Group Tampering Response",
+    "incident_types": ["Firewall Rule Bypass", "Unauthorized Network Access", "Lateral Movement Setup"],
+    "prerequisites": ["CloudTrail enabled", "VPC Flow Logs", "AWS Config tracking security groups"],
+    "techniques_addressed": ["T1578"],
+    "triage_questions": [
+      "Which security group was modified and what ports were opened?",
+      "Who performed the AuthorizeSecurityGroupIngress action?",
+      "What EC2 instances are attached to this security group?",
+      "Has there been any SSH or RDP connection attempts from the internet after the change?",
+      "Was this security group change part of an approved change request?"
+    ],
+    "related_playbooks": ["IR-IAM-002"],
+    "response_phases": {
+      "detection": [
+        "Alert on AuthorizeSecurityGroupIngress with 0.0.0.0/0",
+        "Monitor changes to SSH/RDP ports (22, 3389)",
+        "AWS Config rule: restricted-ssh / restricted-common-ports",
+        "GuardDuty: Recon:EC2/PortProbeUnprotectedPort"
+      ],
+      "analysis": [
+        {
+          "step": "Identify modified security groups",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress --max-items 50"
+        },
+        {
+          "step": "Review current security group rules",
+          "cli": "aws ec2 describe-security-groups --group-ids <SG_ID>"
+        },
+        {
+          "step": "Identify instances using compromised security group",
+          "cli": "aws ec2 describe-instances --filters Name=instance.group-id,Values=<SG_ID> --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress,PublicIpAddress]'"
+        },
+        {
+          "step": "Check VPC Flow Logs for connection attempts",
+          "cli": "aws logs filter-log-events --log-group-name /aws/vpc/flowlogs --filter-pattern '[srcIP, dstPort=22 || dstPort=3389]' --start-time <TIMESTAMP>"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Revoke dangerous ingress rule immediately",
+          "cli": "aws ec2 revoke-security-group-ingress --group-id <SG_ID> --ip-permissions IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges='[{CidrIp=0.0.0.0/0}]'",
+          "priority": "Critical"
+        },
+        {
+          "action": "Apply restrictive NACL to subnet as additional layer",
+          "cli": "aws ec2 create-network-acl-entry --network-acl-id <NACL_ID> --rule-number 100 --protocol tcp --port-range From=22,To=22 --cidr-block 0.0.0.0/0 --egress false --rule-action deny",
+          "priority": "High"
+        },
+        {
+          "action": "Isolate compromised instances",
+          "cli": "aws ec2 modify-instance-attribute --instance-id <INSTANCE_ID> --groups <QUARANTINE_SG_ID>",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Review instances for compromise indicators",
+          "cli": "aws ssm send-command --instance-ids <INSTANCE_ID> --document-name AWS-RunShellScript --parameters 'commands=[\"last -f /var/log/wtmp\",\"cat /var/log/auth.log | grep Accepted\"]'"
+        },
+        {
+          "action": "Terminate compromised instances if needed",
+          "cli": "aws ec2 terminate-instances --instance-ids <COMPROMISED_INSTANCE>"
+        },
+        {
+          "action": "Delete attacker-created security groups",
+          "cli": "aws ec2 delete-security-group --group-id <MALICIOUS_SG>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore security group to baseline configuration",
+          "cli": "aws ec2 authorize-security-group-ingress --group-id <SG_ID> --ip-permissions file://baseline-sg-rules.json"
+        },
+        {
+          "action": "Launch replacement instances from clean AMIs",
+          "cli": "aws ec2 run-instances --image-id <CLEAN_AMI> --instance-type t3.medium --security-group-ids <SECURE_SG> --subnet-id <SUBNET>"
+        },
+        {
+          "action": "Implement AWS Firewall Manager for centralized SG management",
+          "cli": "aws fms put-policy --policy file://centralized-sg-policy.json"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-ENUM-001",
+    "name": "Cloud Service Discovery / Reconnaissance Response",
+    "incident_types": ["Reconnaissance", "Account Enumeration", "Pre-Attack Intelligence Gathering"],
+    "prerequisites": ["CloudTrail with data events", "GuardDuty enabled", "Behavioral baselines"],
+    "techniques_addressed": ["T1526", "T1619"],
+    "triage_questions": [
+      "How many distinct AWS services did the user enumerate?",
+      "What is the total count of List and Describe API calls in the window?",
+      "Has the user accessed these services before?",
+      "Were there any write operations following the enumeration activity?",
+      "What is the user's normal baseline for List/Describe operations?"
+    ],
+    "related_playbooks": ["IR-IAM-001", "IR-IAM-004"],
+    "response_phases": {
+      "detection": [
+        "High volume of List*/Describe*/Get* API calls",
+        "GuardDuty: Recon:IAMUser/ResourcePermissions",
+        "Unusual read-only operations from non-security accounts",
+        "Sequential service enumeration pattern"
+      ],
+      "analysis": [
+        {
+          "step": "Identify enumeration actor",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<SUSPECT> --max-items 1000 | jq '.Events[] | .CloudTrailEvent | fromjson | select(.eventName | startswith(\"List\") or startswith(\"Describe\"))'"
+        },
+        {
+          "step": "Count unique services enumerated",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<SUSPECT> | jq '[.Events[] | .CloudTrailEvent | fromjson | .eventSource] | unique | length'"
+        },
+        {
+          "step": "Check for privileged enumeration (GetAccountAuthorizationDetails)",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=GetAccountAuthorizationDetails"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Deactivate enumeration credentials",
+          "cli": "aws iam update-access-key --user-name <SUSPECT> --access-key-id <AKIA...> --status Inactive",
+          "priority": "High"
+        },
+        {
+          "action": "Apply rate limiting via SCPs if org-level",
+          "cli": "# Implement quota management policies"
+        },
+        {
+          "action": "Monitor for follow-on attacks",
+          "cli": "aws cloudwatch put-metric-alarm --alarm-name HighAPICalls --metric-name CallCount --namespace AWS/Usage --statistic Sum --period 300 --threshold 1000 --comparison-operator GreaterThanThreshold"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Delete compromised access keys",
+          "cli": "aws iam delete-access-key --user-name <SUSPECT> --access-key-id <AKIA...>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Implement least privilege policies",
+          "cli": "aws iam put-user-policy --user-name <USER> --policy-name RestrictedRead --policy-document file://least-privilege-policy.json"
+        },
+        {
+          "action": "Enable AWS CloudTrail Insights for anomaly detection",
+          "cli": "aws cloudtrail put-insight-selectors --trail-name <TRAIL> --insight-selectors '[{\"InsightType\":\"ApiCallRateInsight\"}]'"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-DATA-001",
+    "name": "Snapshot Sharing / Data Transfer Response",
+    "incident_types": ["Data Exfiltration via Snapshots", "Unauthorized Data Sharing", "Cross-Account Data Transfer"],
+    "prerequisites": ["CloudTrail enabled", "EBS/RDS snapshot encryption", "AWS Config snapshot tracking"],
+    "techniques_addressed": ["T1537"],
+    "triage_questions": [
+      "Which snapshots or AMIs were shared externally?",
+      "What AWS account IDs were granted access to the snapshots?",
+      "Was the snapshot made public or shared with specific accounts?",
+      "What data exists on the snapshot or AMI that was shared?",
+      "Did the user who shared the snapshot have legitimate reasons to do so?"
+    ],
+    "related_playbooks": ["IR-S3-001", "IR-S3-002"],
+    "response_phases": {
+      "detection": [
+        "Alert on ModifySnapshotAttribute events",
+        "Monitor ModifyImageAttribute with public sharing",
+        "Track ModifyDBSnapshotAttribute with external accounts",
+        "GuardDuty: Exfiltration:S3/ObjectRead.Unusual (for AMI exfil)"
+      ],
+      "analysis": [
+        {
+          "step": "Identify shared snapshots",
+          "cli": "aws ec2 describe-snapshots --owner-ids self --query 'Snapshots[?CreateVolumePermissions[?Group==`all` || UserId!=null]]'"
+        },
+        {
+          "step": "Check for shared AMIs",
+          "cli": "aws ec2 describe-images --owners self --query 'Images[?LaunchPermissions[?Group==`all` || UserId!=null]]'"
+        },
+        {
+          "step": "Review RDS snapshot permissions",
+          "cli": "aws rds describe-db-snapshots --snapshot-type manual --query 'DBSnapshots[].DBSnapshotIdentifier' | xargs -I {} aws rds describe-db-snapshot-attributes --db-snapshot-identifier {}"
+        },
+        {
+          "step": "Identify external account IDs",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ModifySnapshotAttribute | jq '.Events[] | .CloudTrailEvent | fromjson | .requestParameters.createVolumePermission.add.items[].userId'"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Remove public sharing immediately",
+          "cli": "aws ec2 modify-snapshot-attribute --snapshot-id <SNAP_ID> --attribute createVolumePermission --operation-type remove --group-names all",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke external account permissions",
+          "cli": "aws ec2 modify-snapshot-attribute --snapshot-id <SNAP_ID> --attribute createVolumePermission --operation-type remove --user-ids <EXTERNAL_ACCOUNT>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Remove AMI sharing",
+          "cli": "aws ec2 modify-image-attribute --image-id <AMI_ID> --launch-permission \"Remove=[{UserId=<EXTERNAL_ACCOUNT>}]\"",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke RDS snapshot sharing",
+          "cli": "aws rds modify-db-snapshot-attribute --db-snapshot-identifier <SNAPSHOT> --attribute-name restore --values-to-remove <EXTERNAL_ACCOUNT>",
+          "priority": "Critical"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Delete compromised snapshots if data exfiltrated",
+          "cli": "aws ec2 delete-snapshot --snapshot-id <SNAP_ID>"
+        },
+        {
+          "action": "Deregister exposed AMIs",
+          "cli": "aws ec2 deregister-image --image-id <AMI_ID>"
+        },
+        {
+          "action": "Delete RDS snapshots shared externally",
+          "cli": "aws rds delete-db-snapshot --db-snapshot-identifier <SNAPSHOT>"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Create new encrypted snapshots",
+          "cli": "aws ec2 create-snapshot --volume-id <VOL_ID> --description \"Secure snapshot\" --tag-specifications 'ResourceType=snapshot,Tags=[{Key=Encrypted,Value=true}]'"
+        },
+        {
+          "action": "Enforce encryption on all snapshots via SCP",
+          "cli": "aws organizations attach-policy --policy-id <FORCE_ENCRYPTION_SCP> --target-id <OU>"
+        },
+        {
+          "action": "Implement AWS Backup for centralized snapshot management",
+          "cli": "aws backup create-backup-plan --backup-plan file://encrypted-backup-plan.json"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-DESTRUCT-001",
+    "name": "Mass Deletion / Data Destruction Response",
+    "incident_types": ["Data Destruction", "Ransomware", "Sabotage", "Resource Termination"],
+    "prerequisites": ["CloudTrail enabled", "S3 versioning", "RDS automated backups", "EBS snapshots"],
+    "techniques_addressed": ["T1485"],
+    "triage_questions": [
+      "How many resources were deleted and what types?",
+      "What is the timeline of deletion events?",
+      "Which user or role performed the mass deletion?",
+      "Were the deletions targeted at specific resource types or random?",
+      "Are there backups available for the deleted resources?"
+    ],
+    "related_playbooks": ["IR-IAM-001"],
+    "response_phases": {
+      "detection": [
+        "High volume Delete*/Terminate* events",
+        "GuardDuty: Impact:S3/ObjectDelete.Unusual",
+        "CloudWatch alarm for deletion rate spike",
+        "AWS Config compliance changes"
+      ],
+      "analysis": [
+        {
+          "step": "Identify deletion actor and scope",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=Username,AttributeValue=<ACTOR> | jq '.Events[] | .CloudTrailEvent | fromjson | select(.eventName | startswith(\"Delete\") or startswith(\"Terminate\"))'"
+        },
+        {
+          "step": "List deleted resources",
+          "cli": "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=DeleteObject --max-items 1000 | jq '.Events[] | .CloudTrailEvent | fromjson | .requestParameters.bucketName, .requestParameters.key'"
+        },
+        {
+          "step": "Check for backup availability",
+          "cli": "aws backup list-recovery-points-by-backup-vault --backup-vault-name Default"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Immediately disable attacker credentials",
+          "cli": "aws iam delete-access-key --user-name <ATTACKER> --access-key-id <AKIA...>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Apply deny-all policy to remaining resources",
+          "cli": "aws iam put-user-policy --user-name <ATTACKER> --policy-name EmergencyDeny --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":\"*\",\"Resource\":\"*\"}]}'",
+          "priority": "Critical"
+        },
+        {
+          "action": "Enable MFA delete on S3 buckets",
+          "cli": "aws s3api put-bucket-versioning --bucket <BUCKET> --versioning-configuration Status=Enabled,MFADelete=Enabled --mfa '<SERIAL> <CODE>'",
+          "priority": "High"
+        },
+        {
+          "action": "Snapshot remaining resources immediately",
+          "cli": "aws ec2 create-snapshot --volume-id <VOL_ID> --description 'Emergency backup'",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Review for other compromised accounts",
+          "cli": "aws iam list-users | jq '.Users[] | select(.CreateDate > \"<INCIDENT_START>\")'"
+        },
+        {
+          "action": "Audit for persistence mechanisms",
+          "cli": "aws lambda list-functions --query 'Functions[?LastModified>`<INCIDENT_START>`]'"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore S3 objects from versioning",
+          "cli": "aws s3api list-object-versions --bucket <BUCKET> --prefix <PREFIX> | jq -r '.DeleteMarkers[] | \"aws s3api delete-object --bucket <BUCKET> --key \" + .Key + \" --version-id \" + .VersionId' | bash"
+        },
+        {
+          "action": "Restore EC2 instances from snapshots",
+          "cli": "aws ec2 create-volume --snapshot-id <SNAP_ID> --availability-zone <AZ>; aws ec2 run-instances --image-id <AMI> --block-device-mappings DeviceName=/dev/xvda,Ebs={VolumeId=<VOL_ID>}"
+        },
+        {
+          "action": "Restore RDS from automated backup",
+          "cli": "aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier <SOURCE> --target-db-instance-identifier <TARGET> --restore-time <TIMESTAMP>"
+        },
+        {
+          "action": "Implement S3 Object Lock to prevent future deletion",
+          "cli": "aws s3api put-object-lock-configuration --bucket <BUCKET> --object-lock-configuration ObjectLockEnabled=Enabled,Rule={DefaultRetention={Mode=COMPLIANCE,Days=90}}"
+        },
+        {
+          "action": "Enable AWS Backup Vault Lock",
+          "cli": "aws backup put-backup-vault-lock-configuration --backup-vault-name <VAULT> --min-retention-days 30"
+        }
+      ]
+    }
+  },
+  {
+    "playbook_id": "IR-LAMBDA-001",
+    "name": "Lambda Function Backdoor Response",
+    "incident_types": ["Serverless Backdoor", "Data Exfiltration via Lambda", "Unauthorized Function Creation"],
+    "prerequisites": ["CloudTrail with Lambda data events", "Lambda function versioning", "X-Ray tracing"],
+    "techniques_addressed": ["T1537", "T1078"],
+    "triage_questions": [
+      "Which Lambda function was created or modified?",
+      "What external AWS accounts or principals were granted invocation permissions?",
+      "What IAM role is the Lambda function using?",
+      "Has the Lambda function been invoked and by whom?",
+      "What resources does the Lambda function have access to?"
+    ],
+    "related_playbooks": ["IR-IAM-002", "IR-DATA-001"],
+    "response_phases": {
+      "detection": [
+        "Alert on CreateFunction from unusual actors",
+        "Monitor AddPermission granting external accounts",
+        "Track UpdateFunctionCode modifications",
+        "GuardDuty: Impact:Runtime/MaliciousIPCaller"
+      ],
+      "analysis": [
+        {
+          "step": "List recently created Lambda functions",
+          "cli": "aws lambda list-functions --query 'Functions[?LastModified>`<DATE>`]'"
+        },
+        {
+          "step": "Review function resource policies",
+          "cli": "aws lambda get-policy --function-name <FUNCTION>"
+        },
+        {
+          "step": "Check function invocation logs",
+          "cli": "aws logs filter-log-events --log-group-name /aws/lambda/<FUNCTION> --start-time <TIMESTAMP>"
+        },
+        {
+          "step": "Inspect function code for malicious logic",
+          "cli": "aws lambda get-function --function-name <FUNCTION> --query 'Code.Location' | xargs wget -O function.zip"
+        }
+      ],
+      "containment": [
+        {
+          "action": "Remove external invocation permissions",
+          "cli": "aws lambda remove-permission --function-name <FUNCTION> --statement-id <STATEMENT_ID>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Delete malicious Lambda function",
+          "cli": "aws lambda delete-function --function-name <MALICIOUS_FUNCTION>",
+          "priority": "Critical"
+        },
+        {
+          "action": "Revoke IAM role permissions attached to function",
+          "cli": "aws iam detach-role-policy --role-name <LAMBDA_ROLE> --policy-arn <OVERLY_PERMISSIVE_POLICY>",
+          "priority": "High"
+        }
+      ],
+      "eradication": [
+        {
+          "action": "Review all Lambda functions for similar patterns",
+          "cli": "aws lambda list-functions | jq -r '.Functions[].FunctionName' | xargs -I {} aws lambda get-policy --function-name {} 2>/dev/null"
+        },
+        {
+          "action": "Audit S3 buckets/DynamoDB tables accessed by function",
+          "cli": "aws logs filter-log-events --log-group-name /aws/lambda/<FUNCTION> --filter-pattern '[time, request_id, event_type, ...] event_type=~\"s3\" || event_type=~\"dynamodb\"'"
+        }
+      ],
+      "recovery": [
+        {
+          "action": "Restore legitimate function from previous version",
+          "cli": "aws lambda publish-version --function-name <FUNCTION> --code-sha-256 <KNOWN_GOOD_SHA>"
+        },
+        {
+          "action": "Implement function URL authentication",
+          "cli": "aws lambda update-function-url-config --function-name <FUNCTION> --auth-type AWS_IAM"
+        },
+        {
+          "action": "Enable resource-based policy restrictions via SCP",
+          "cli": "aws organizations attach-policy --policy-id <LAMBDA_RESTRICTION_SCP> --target-id <OU>"
+        }
+      ]
+    }
+  }
+]

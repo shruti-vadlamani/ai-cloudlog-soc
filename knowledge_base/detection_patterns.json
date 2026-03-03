@@ -1,0 +1,847 @@
+[
+  {
+    "pattern_id": "IOC-IAM-001",
+    "name": "Unusual IAM Role Assumption",
+    "description": "Detects suspicious cross-account role assumptions from unfamiliar accounts or unusual source IPs. May indicate compromised credentials or unauthorized access attempts.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["AssumeRole"],
+      "errorCode": null,
+      "userIdentity_type": ["AssumedRole", "IAMUser"]
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, sourceIPAddress, requestParameters.roleArn, userAgent FROM cloudtrail_logs WHERE eventName = 'AssumeRole' AND sourceIPAddress NOT IN (SELECT ip FROM whitelist_ips) AND eventTime > date_add('day', -7, current_timestamp) GROUP BY 1,2,3,4,5 HAVING count(*) > 5",
+    "sigma_rule": "title: Unusual AssumeRole Activity\nstatus: experimental\ndescription: Detects AssumeRole from untrusted sources\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'AssumeRole'\n  condition: selection\nfields:\n  - sourceIPAddress\n  - userIdentity.principalId\n  - requestParameters.roleArn\nlevel: high",
+    "threshold": 5,
+    "time_window_minutes": 15,
+    "anomaly_score_threshold": 0.8,
+    "techniques_detected": ["T1078", "T1199"],
+    "triggers_playbook": ["IR-IAM-002"],
+    "false_positives": [
+      "Legitimate cross-account role assumptions for DevOps",
+      "Automated deployment pipelines",
+      "Third-party monitoring services with approved cross-account access"
+    ],
+    "behavioral_indicators": {
+      "iam_ratio": {
+        "threshold": 0.7,
+        "direction": "above"
+      },
+      "iam_events_zscore": {
+        "threshold": 2.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_non_admin"],
+      "expected_from": ["security_engineer", "iac_pipeline", "admin"],
+      "persona_note": "Cross-account role assumption is suspicious from developers whose IAM ratio normally stays below 0.1."
+    },
+    "embedding_description": "User exhibits elevated IAM activity ratio combined with AssumeRole API calls to unfamiliar external accounts or from unusual IP addresses. The IAM events z-score exceeds baseline by 2.5 standard deviations within a short time window. This behavioral shift indicates potential credential compromise where an attacker uses stolen credentials to pivot into other accounts via cross-account roles. Legitimate users performing cross-account operations typically operate from known IP ranges and maintain consistent access patterns."
+  },
+  {
+    "pattern_id": "IOC-IAM-002",
+    "name": "Privilege Escalation via Policy Attachment",
+    "description": "Detects when administrative policies (e.g., AdministratorAccess, PowerUserAccess) are attached to users or roles, especially outside approved change windows.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["AttachUserPolicy", "AttachRolePolicy", "PutUserPolicy", "PutRolePolicy"],
+      "errorCode": null,
+      "requestParameters_policyArn": [
+        "arn:aws:iam::aws:policy/AdministratorAccess",
+        "arn:aws:iam::aws:policy/PowerUserAccess",
+        "arn:aws:iam::*:policy/*Admin*"
+      ]
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, eventName, requestParameters.policyArn, requestParameters.userName, requestParameters.roleName FROM cloudtrail_logs WHERE eventName IN ('AttachUserPolicy', 'AttachRolePolicy', 'PutUserPolicy', 'PutRolePolicy') AND (requestParameters.policyArn LIKE '%AdministratorAccess%' OR requestParameters.policyArn LIKE '%Admin%') AND errorCode IS NULL",
+    "sigma_rule": "title: AWS IAM Privilege Escalation\nstatus: stable\ndescription: Detects attachment of administrative IAM policies\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'AttachUserPolicy'\n      - 'AttachRolePolicy'\n    requestParameters.policyArn|contains:\n      - 'AdministratorAccess'\n      - 'PowerUserAccess'\n  condition: selection\nfalsepositives:\n  - Terraform/CloudFormation deployments\nlevel: critical",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.95,
+    "techniques_detected": ["T1098"],
+    "triggers_playbook": ["IR-IAM-003"],
+    "false_positives": [
+      "Infrastructure as Code (Terraform/CloudFormation) deployments",
+      "Authorized privilege grants during incident response",
+      "New employee onboarding with admin access"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 2,
+        "direction": "above"
+      },
+      "after_hours_ratio": {
+        "threshold": 0.5,
+        "direction": "above"
+      },
+      "iam_write_events_zscore": {
+        "threshold": 3.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "support_engineer", "any_non_admin"],
+      "expected_from": ["security_engineer", "iac_pipeline"],
+      "persona_note": "Policy attachment from developers or analysts whose IAM write ratio is normally zero signals privilege escalation."
+    },
+    "embedding_description": "User performs IAM write operations attaching administrative policies such as AdministratorAccess to users or roles. The iam_write_events count exceeds 2 which dramatically deviates from a typical developer baseline of zero. Often occurs after-hours when security personnel are less vigilant. This sequence is characteristic of an attacker who gained initial access and is now elevating privileges for broader access. Legitimate policy attachments occur through automated IaC pipelines or during scheduled maintenance windows with proper change tickets."
+  },
+  {
+    "pattern_id": "IOC-S3-001",
+    "name": "Mass S3 Data Exfiltration",
+    "description": "Detects high-volume GetObject requests indicating potential data exfiltration from S3 buckets. Looks for anomalous download patterns.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["GetObject"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT sourceIPAddress, userIdentity.principalId, count(*) as request_count, sum(cast(json_extract(additionalEventData, '$.bytesTransferredOut') as bigint)) as total_bytes FROM cloudtrail_logs WHERE eventName = 'GetObject' AND eventTime > date_add('minute', -5, current_timestamp) GROUP BY 1, 2 HAVING request_count > 100 OR total_bytes > 10737418240",
+    "sigma_rule": "title: AWS S3 Mass Data Download\nstatus: experimental\ndescription: Detects large scale S3 GetObject operations\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'GetObject'\n  timeframe: 5m\n  condition: selection | count(by sourceIPAddress) > 100\nfields:\n  - sourceIPAddress\n  - userIdentity.principalId\n  - requestParameters.bucketName\nlevel: high",
+    "threshold": 100,
+    "time_window_minutes": 5,
+    "anomaly_score_threshold": 0.85,
+    "techniques_detected": ["T1530"],
+    "triggers_playbook": ["IR-S3-001"],
+    "false_positives": [
+      "Legitimate backup operations",
+      "Data migration jobs",
+      "Analytics workloads processing S3 data",
+      "CDN origin pulls"
+    ],
+    "behavioral_indicators": {
+      "s3_get_events": {
+        "threshold": 100,
+        "direction": "above"
+      },
+      "bytes_out_total": {
+        "threshold": 10737418240,
+        "direction": "above"
+      },
+      "s3_get_events_zscore": {
+        "threshold": 4.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["data_analyst", "developer", "finance_user"],
+      "expected_from": ["etl_service", "backup_service"],
+      "persona_note": "Mass S3 downloads from analysts whose normal S3 get count is under 10 indicates data theft."
+    },
+    "embedding_description": "User executes over 100 S3 GetObject operations within a 5-minute window with total data transfer exceeding 10GB. The s3_get_events feature shows a z-score above 4.0 standard deviations from user baseline. This represents a significant volumetric spike characteristic of bulk data exfiltration. Attackers often script automated downloads after gaining cloud credentials. Legitimate high-volume S3 access comes from designated ETL pipelines and backup services with predictable schedules and patterns."
+  },
+  {
+    "pattern_id": "IOC-S3-002",
+    "name": "S3 Bucket Policy Modification for External Access",
+    "description": "Detects modifications to S3 bucket policies that grant access to external AWS accounts, public access, or overly permissive conditions.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["PutBucketPolicy", "PutBucketAcl"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, requestParameters.bucketName, requestParameters.bucketPolicy FROM cloudtrail_logs WHERE eventName IN ('PutBucketPolicy', 'PutBucketAcl') AND (requestParameters.bucketPolicy LIKE '%*%' OR requestParameters.acl LIKE '%public%')",
+    "sigma_rule": "title: AWS S3 Bucket Exposed\nstatus: stable\ndescription: Detects S3 bucket policy changes allowing external access\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'PutBucketPolicy'\n      - 'PutBucketAcl'\n  condition: selection\nlevel: critical",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.9,
+    "techniques_detected": ["T1537"],
+    "triggers_playbook": ["IR-S3-002"],
+    "false_positives": [
+      "Static website hosting configuration",
+      "CloudFront OAI setup",
+      "Legitimate third-party integrations"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "iam_write_ratio": {
+        "threshold": 0.3,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "support_engineer"],
+      "expected_from": ["security_engineer", "iac_pipeline"],
+      "persona_note": "Bucket policy changes from non-infrastructure accounts whose write ratio is normally zero signals unauthorized exposure."
+    },
+    "embedding_description": "User modifies S3 bucket policies via PutBucketPolicy or PutBucketAcl calls granting public or external account access. The iam_write_ratio exceeds 0.3 when the user's normal ratio is near zero. This is a persistence and data staging technique where attackers modify bucket policies to enable exfiltration from external infrastructure they control. The attack typically follows initial credential compromise. Legitimate bucket policy modifications occur through IaC pipelines with predictable user agents and source IPs."
+  },
+  {
+    "pattern_id": "IOC-IAM-003",
+    "name": "Access Key Creation for Persistence",
+    "description": "Detects creation of new IAM access keys, especially for existing users or service accounts. Attackers create additional keys for persistent backdoor access.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["CreateAccessKey"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, requestParameters.userName, responseElements.accessKey.accessKeyId FROM cloudtrail_logs WHERE eventName = 'CreateAccessKey' AND errorCode IS NULL ORDER BY eventTime DESC",
+    "sigma_rule": "title: AWS IAM Access Key Created\nstatus: experimental\ndescription: Detects creation of new IAM access keys\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'CreateAccessKey'\n    errorCode: null\n  condition: selection\nfields:\n  - requestParameters.userName\n  - responseElements.accessKey.accessKeyId\nlevel: medium",
+    "threshold": 1,
+    "time_window_minutes": 60,
+    "anomaly_score_threshold": 0.6,
+    "techniques_detected": ["T1098", "T1136"],
+    "triggers_playbook": ["IR-IAM-002"],
+    "false_positives": [
+      "Developer key rotation",
+      "New application service account setup",
+      "CI/CD pipeline key generation"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "after_hours_ratio": {
+        "threshold": 0.7,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["data_analyst", "finance_user", "support_engineer"],
+      "expected_from": ["admin", "security_engineer", "iac_pipeline"],
+      "persona_note": "Access key creation by non-admin users especially after-hours indicates persistence mechanism establishment."
+    },
+    "embedding_description": "User creates new IAM access keys via CreateAccessKey operation for their own account or other users. The after_hours_ratio exceeds 0.7 indicating this occurs outside business hours when monitoring is reduced. This is a common persistence technique where attackers create backup credentials for maintaining access even if original credentials are revoked. The behavioral anomaly is especially suspicious when performed by users who never normally interact with IAM. Legitimate key creation occurs during working hours through automated service account provisioning."
+  },
+  {
+    "pattern_id": "IOC-IAM-004",
+    "name": "Console Login from TOR or VPN",
+    "description": "Detects AWS console logins originating from TOR exit nodes, known VPN services, or anonymization networks indicating attempts to hide attacker location.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["ConsoleLogin"],
+      "errorCode": null,
+      "responseElements_ConsoleLogin": "Success"
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, sourceIPAddress, userAgent, responseElements.ConsoleLogin FROM cloudtrail_logs WHERE eventName = 'ConsoleLogin' AND sourceIPAddress IN (SELECT ip FROM tor_exit_nodes)",
+    "sigma_rule": "title: AWS Console Login from TOR\nstatus: stable\ndescription: Detects console access from anonymization networks\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'ConsoleLogin'\n    responseElements.ConsoleLogin: 'Success'\n  condition: selection\nlevel: critical",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 1.0,
+    "techniques_detected": ["T1078"],
+    "triggers_playbook": ["IR-IAM-001"],
+    "false_positives": [
+      "Privacy-conscious legitimate users (rare in enterprise)",
+      "Remote workers in restricted countries (should use corporate VPN)"
+    ],
+    "behavioral_indicators": {
+      "iam_ratio": {
+        "threshold": 0.5,
+        "direction": "above"
+      },
+      "total_events_zscore": {
+        "threshold": 2.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["any_user"],
+      "expected_from": [],
+      "persona_note": "TOR-based console logins are universally suspicious regardless of user role as enterprise policies prohibit anonymization."
+    },
+    "embedding_description": "User successfully authenticates to AWS console from IP addresses belonging to TOR exit nodes or anonymization networks. The total event activity shows elevated z-score indicating the user is more active than usual following the suspicious login. Attackers use anonymization to hide their geographic origin and infrastructure. This behavioral pattern is unambiguous malicious activity since legitimate enterprise access occurs through corporate networks or approved VPN gateways with known IP ranges. No false positive scenarios exist for TOR-based console access."
+  },
+  {
+    "pattern_id": "IOC-IAM-005",
+    "name": "MFA Deactivation",
+    "description": "Detects deactivation or deletion of multi-factor authentication devices, which may indicate an attacker attempting to weaken account security.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["DeactivateMFADevice", "DeleteVirtualMFADevice"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, eventName, requestParameters.userName, requestParameters.serialNumber FROM cloudtrail_logs WHERE eventName IN ('DeactivateMFADevice', 'DeleteVirtualMFADevice') AND errorCode IS NULL",
+    "sigma_rule": "title: AWS MFA Disabled\nstatus: stable\ndescription: Detects MFA device deactivation or deletion\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'DeactivateMFADevice'\n      - 'DeleteVirtualMFADevice'\n  condition: selection\nlevel: high",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.85,
+    "techniques_detected": ["T1556"],
+    "triggers_playbook": ["IR-IAM-003"],
+    "false_positives": [
+      "User replacing lost/broken MFA device",
+      "Employee offboarding",
+      "MFA device upgrade/replacement"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "iam_write_ratio": {
+        "threshold": 0.5,
+        "direction": "above"
+      },
+      "iam_write_events_zscore": {
+        "threshold": 3.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_non_admin"],
+      "expected_from": ["security_engineer", "admin"],
+      "persona_note": "MFA deactivation by non-security users whose IAM write activity is normally zero indicates authentication weakening."
+    },
+    "embedding_description": "User performs DeactivateMFADevice or DeleteVirtualMFADevice operations disabling multi-factor authentication protections. The iam_write_ratio spikes above 0.5 with z-score exceeding 3.5 standard deviations from baseline. This is a defense evasion technique where attackers remove MFA requirements after compromising an account to enable easier re-access without needing the second factor. The pattern is especially suspicious when performed by users who never touch IAM configurations. Legitimate MFA changes occur through help desk tickets or self-service portals with proper identity verification."
+  },
+  {
+    "pattern_id": "IOC-EC2-001",
+    "name": "Security Group Opening SSH/RDP to Internet",
+    "description": "Detects security group modifications that allow SSH (22) or RDP (3389) access from the internet (0.0.0.0/0), creating potential entry points.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["AuthorizeSecurityGroupIngress"],
+      "errorCode": null,
+      "requestParameters_ipPermissions_toPort": [22, 3389],
+      "requestParameters_ipPermissions_cidrIp": "0.0.0.0/0"
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, requestParameters.groupId, requestParameters.ipPermissions FROM cloudtrail_logs WHERE eventName = 'AuthorizeSecurityGroupIngress' AND (json_extract_scalar(requestParameters, '$.ipPermissions[0].toPort') IN ('22', '3389')) AND json_extract_scalar(requestParameters, '$.ipPermissions[0].ipRanges[0].cidrIp') = '0.0.0.0/0'",
+    "sigma_rule": "title: AWS Security Group Opened to Internet\nstatus: stable\ndescription: Detects risky security group modifications\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'AuthorizeSecurityGroupIngress'\n  filter:\n    requestParameters.ipPermissions.toPort:\n      - 22\n      - 3389\n    requestParameters.ipPermissions.ipRanges.cidrIp: '0.0.0.0/0'\n  condition: selection and filter\nlevel: high",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.8,
+    "techniques_detected": ["T1578"],
+    "triggers_playbook": ["IR-EC2-001"],
+    "false_positives": [
+      "Bastion host configuration",
+      "VPN gateway setup",
+      "Temporary troubleshooting access (should be reverted quickly)"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "write_ratio": {
+        "threshold": 0.4,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_non_infrastructure"],
+      "expected_from": ["security_engineer", "network_engineer", "iac_pipeline"],
+      "persona_note": "Security group exposure from developers whose write ratio is normally zero indicates unauthorized network changes."
+    },
+    "embedding_description": "User modifies EC2 security groups via AuthorizeSecurityGroupIngress allowing SSH or RDP access from the entire internet. The write_ratio exceeds 0.4 when user baseline is near zero write operations. This creates internet-facing attack surface enabling remote access. Attackers use this to establish footholds or lateral movement paths after initial compromise. The pattern is suspicious from non-infrastructure personnel. Legitimate security group modifications occur through network engineering teams following change management or via IaC deployments."
+  },
+  {
+    "pattern_id": "IOC-IAM-006",
+    "name": "Impossible Travel - Geo-Velocity",
+    "description": "Detects API calls from two different geographic locations in a timeframe that would be physically impossible for legitimate users.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["*"],
+      "errorCode": null
+    },
+    "athena_query": "WITH geo_locations AS (SELECT eventTime, userIdentity.principalId, sourceIPAddress, geoip(sourceIPAddress).country as country, geoip(sourceIPAddress).city as city FROM cloudtrail_logs WHERE eventTime > date_add('hour', -24, current_timestamp)) SELECT a.principalId, a.eventTime as time1, a.country as country1, b.eventTime as time2, b.country as country2, date_diff('minute', a.eventTime, b.eventTime) as time_diff FROM geo_locations a JOIN geo_locations b ON a.principalId = b.principalId WHERE a.country != b.country AND date_diff('minute', a.eventTime, b.eventTime) < 120 AND date_diff('minute', a.eventTime, b.eventTime) > 0",
+    "sigma_rule": "title: AWS Impossible Travel Detected\nstatus: experimental\ndescription: Detects API calls from geographically disparate locations\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    # Requires correlation logic\n  condition: selection\nlevel: high",
+    "threshold": 1,
+    "time_window_minutes": 120,
+    "anomaly_score_threshold": 0.9,
+    "techniques_detected": ["T1078"],
+    "triggers_playbook": ["IR-IAM-001"],
+    "false_positives": [
+      "VPN usage switching exit points",
+      "Cloud service provider NAT/proxy rotation",
+      "Credential sharing (prohibited but may occur)"
+    ],
+    "behavioral_indicators": {
+      "total_events_zscore": {
+        "threshold": 2.0,
+        "direction": "above"
+      },
+      "iam_ratio": {
+        "threshold": 0.3,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["any_user"],
+      "expected_from": [],
+      "persona_note": "Geographic impossibility indicates credential theft regardless of user role; legitimate users cannot teleport between continents."
+    },
+    "embedding_description": "User credentials are used from two geographically distant locations within a timeframe too short for physical travel. The total activity shows elevated z-score indicating both sessions are actively making API calls. This pattern definitively indicates credential compromise where stolen credentials are used by an attacker while the legitimate user continues normal activity. Geographic velocity anomalies are high-confidence indicators of account takeover. No legitimate scenario allows the same credentials to be used simultaneously from distant continents."
+  },
+  {
+    "pattern_id": "IOC-ENUM-001",
+    "name": "Comprehensive Cloud Service Enumeration",
+    "description": "Detects sequential enumeration of AWS services indicating reconnaissance. Attackers often perform discovery before launching attacks.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["List*", "Describe*", "Get*"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT userIdentity.principalId, count(DISTINCT eventsource) as services_enumerated, count(*) as total_calls FROM cloudtrail_logs WHERE eventName LIKE 'List%' OR eventName LIKE 'Describe%' AND eventTime > date_add('minute', -30, current_timestamp) GROUP BY 1 HAVING services_enumerated > 10 AND total_calls > 50",
+    "sigma_rule": "title: AWS Service Enumeration\nstatus: experimental\ndescription: Detects extensive service discovery activity\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName|startswith:\n      - 'List'\n      - 'Describe'\n      - 'Get'\n  timeframe: 30m\n  condition: selection | count(by userIdentity.principalId) > 50\nlevel: medium",
+    "threshold": 50,
+    "time_window_minutes": 30,
+    "anomaly_score_threshold": 0.7,
+    "techniques_detected": ["T1526", "T1619"],
+    "triggers_playbook": ["IR-ENUM-001"],
+    "false_positives": [
+      "Security auditing tools",
+      "Cloud management platforms (CloudHealth, CloudCheckr)",
+      "Initial AWS CLI setup by new users",
+      "Automated compliance scanning"
+    ],
+    "behavioral_indicators": {
+      "iam_list_events": {
+        "threshold": 20,
+        "direction": "above"
+      },
+      "total_events_zscore": {
+        "threshold": 3.0,
+        "direction": "above"
+      },
+      "iam_list_events_zscore": {
+        "threshold": 4.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst"],
+      "expected_from": ["security_engineer", "network_engineer"],
+      "persona_note": "Extensive enumeration by developers who normally code applications indicates reconnaissance after credential compromise."
+    },
+    "embedding_description": "User performs extensive List and Describe API calls across many AWS services within a short window. The iam_list_events exceeds 20 with z-score above 4.0 standard deviations from baseline. This reconnaissance pattern indicates an attacker mapping the cloud environment to identify high-value targets like S3 buckets with sensitive data or overprivileged IAM roles. Legitimate enumeration occurs during security audits or compliance scanning with proper authorization. Developers investigating issues typically focus on specific services, not comprehensive sweeps."
+  },
+  {
+    "pattern_id": "IOC-IAM-007",
+    "name": "Root Account Usage",
+    "description": "Detects any usage of the AWS root account. Root account should rarely be used and only for specific account management tasks.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["*"],
+      "userIdentity_type": "Root",
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, eventName, sourceIPAddress, userAgent FROM cloudtrail_logs WHERE userIdentity.type = 'Root' AND eventName != 'AwsServiceEvent' ORDER BY eventTime DESC",
+    "sigma_rule": "title: AWS Root Account Activity\nstatus: stable\ndescription: Detects any root account usage\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    userIdentity.type: 'Root'\n  filter:\n    eventName: 'AwsServiceEvent'\n  condition: selection and not filter\nlevel: critical",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.95,
+    "techniques_detected": ["T1078"],
+    "triggers_playbook": ["IR-IAM-004"],
+    "false_positives": [
+      "Billing console access",
+      "Support case creation",
+      "Account closure operations",
+      "Enabling specific account features requiring root"
+    ],
+    "behavioral_indicators": {
+      "iam_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "total_events_zscore": {
+        "threshold": 5.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["any_usage"],
+      "expected_from": [],
+      "persona_note": "Root account use is anomalous by definition; accounts should use IAM users with MFA for all regular activities."
+    },
+    "embedding_description": "The AWS root account performs API operations which should be extraordinarily rare. Root credentials have unlimited privileges across the entire AWS account including billing changes deletion of security controls and account closure. Best practices mandate root credentials be locked away and accessed only for specific account-level tasks that cannot be delegated. Any root activity triggers critical alerts. Z-score elevation indicates ongoing activity. Root compromise enables complete environment takeover."
+  },
+  {
+    "pattern_id": "IOC-DATA-001",
+    "name": "Snapshot or AMI Shared Externally",
+    "description": "Detects when EBS snapshots, RDS snapshots, or AMIs are shared with external AWS accounts or made public, potentially exposing data.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["ModifySnapshotAttribute", "ModifyImageAttribute", "ModifyDBSnapshotAttribute"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, eventName, requestParameters.attributeType, requestParameters.createVolumePermission, requestParameters.accountsToAdd FROM cloudtrail_logs WHERE eventName IN ('ModifySnapshotAttribute', 'ModifyImageAttribute', 'ModifyDBSnapshotAttribute') AND (requestParameters.createVolumePermission LIKE '%all%' OR requestParameters.accountsToAdd IS NOT NULL)",
+    "sigma_rule": "title: AWS Snapshot Shared Externally\nstatus: stable\ndescription: Detects snapshots shared with external accounts\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'ModifySnapshotAttribute'\n      - 'ModifyImageAttribute'\n      - 'ModifyDBSnapshotAttribute'\n  condition: selection\nlevel: critical",
+    "threshold": 1,
+    "time_window_minutes": 1,
+    "anomaly_score_threshold": 0.9,
+    "techniques_detected": ["T1537"],
+    "triggers_playbook": ["IR-DATA-001"],
+    "false_positives": [
+      "Disaster recovery to alternate AWS account",
+      "Sharing AMIs with partner organizations",
+      "Dev/test environment snapshot sharing"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "write_ratio": {
+        "threshold": 0.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_non_admin"],
+      "expected_from": ["admin", "backup_service"],
+      "persona_note": "Snapshot sharing by non-infrastructure users whose write operations are normally zero indicates data exfiltration preparation."
+    },
+    "embedding_description": "User modifies snapshot or AMI permissions via ModifySnapshotAttribute ModifyImageAttribute or ModifyDBSnapshotAttribute to share with external AWS accounts or make public. The write_ratio exceeds 0.5 when user baseline is near zero. This is a critical data exfiltration technique where attackers create snapshots of volumes or databases then share with attacker-controlled AWS accounts for offline access. Once shared the data can be mounted and extracted outside victim monitoring. Legitimate snapshot sharing occurs through DR procedures with proper approval."
+  },
+  {
+    "pattern_id": "IOC-DESTRUCT-001",
+    "name": "Mass Resource Deletion",
+    "description": "Detects large-scale deletion of AWS resources indicating potential data destruction or sabotage attack.",
+    "severity": "Critical",
+    "cloudtrail_event_patterns": {
+      "eventName": ["Delete*", "Terminate*"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT userIdentity.principalId, count(*) as deletion_count, array_agg(DISTINCT eventName) as delete_events FROM cloudtrail_logs WHERE (eventName LIKE 'Delete%' OR eventName LIKE 'Terminate%') AND errorCode IS NULL AND eventTime > date_add('minute', -15, current_timestamp) GROUP BY 1 HAVING deletion_count > 10",
+    "sigma_rule": "title: AWS Mass Deletion Event\nstatus: experimental\ndescription: Detects high volume of deletion operations\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName|startswith:\n      - 'Delete'\n      - 'Terminate'\n    errorCode: null\n  timeframe: 15m\n  condition: selection | count(by userIdentity.principalId) > 10\nlevel: critical",
+    "threshold": 10,
+    "time_window_minutes": 15,
+    "anomaly_score_threshold": 0.9,
+    "techniques_detected": ["T1485"],
+    "triggers_playbook": ["IR-DESTRUCT-001"],
+    "false_positives": [
+      "Infrastructure teardown by IaC tools",
+      "Automated cleanup of test environments",
+      "Decommissioning projects",
+      "Cost optimization resource removal"
+    ],
+    "behavioral_indicators": {
+      "s3_delete_events": {
+        "threshold": 10,
+        "direction": "above"
+      },
+      "delete_ratio": {
+        "threshold": 0.6,
+        "direction": "above"
+      },
+      "s3_delete_events_zscore": {
+        "threshold": 5.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_non_infrastructure"],
+      "expected_from": ["iac_pipeline"],
+      "persona_note": "Mass deletion by users whose delete operations are normally zero indicates sabotage or ransomware-style destruction."
+    },
+    "embedding_description": "User performs high volume of Delete or Terminate operations across multiple AWS resources in a short timeframe. The s3_delete_events exceeds 10 with delete_ratio above 0.6 and z-score over 5.0 standard deviations. This destructive pattern indicates ransomware data wiping or disgruntled insider sabotage destroying infrastructure and data to cause business disruption. Attackers may delete resources to cover tracks or extort victims. Legitimate mass deletion occurs through IaC teardown with predictable patterns. Manual destruction sprees are critical incidents requiring immediate response."
+  },
+  {
+    "pattern_id": "IOC-IAM-008",
+    "name": "Brute Force Authentication Attempts",
+    "description": "Detects multiple failed authentication attempts followed by successful login, indicating password guessing or credential stuffing.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["ConsoleLogin"],
+      "responseElements_ConsoleLogin": "Failure"
+    },
+    "athena_query": "WITH failures AS (SELECT sourceIPAddress, userIdentity.principalId, count(*) as fail_count FROM cloudtrail_logs WHERE eventName = 'ConsoleLogin' AND responseElements.ConsoleLogin = 'Failure' AND eventTime > date_add('hour', -1, current_timestamp) GROUP BY 1, 2 HAVING fail_count > 5) SELECT f.sourceIPAddress, f.principalId, f.fail_count, s.eventTime as success_time FROM failures f JOIN cloudtrail_logs s ON f.sourceIPAddress = s.sourceIPAddress WHERE s.eventName = 'ConsoleLogin' AND s.responseElements.ConsoleLogin = 'Success' AND s.eventTime > date_add('hour', -1, current_timestamp)",
+    "sigma_rule": "title: AWS Brute Force Login\nstatus: stable\ndescription: Detects brute force authentication attempts\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'ConsoleLogin'\n    responseElements.ConsoleLogin: 'Failure'\n  timeframe: 1h\n  condition: selection | count(by sourceIPAddress) > 5\nlevel: high",
+    "threshold": 5,
+    "time_window_minutes": 60,
+    "anomaly_score_threshold": 0.8,
+    "techniques_detected": ["T1110"],
+    "triggers_playbook": ["IR-IAM-001"],
+    "false_positives": [
+      "Users forgetting passwords",
+      "Expired credentials in automation scripts",
+      "Misconfigured applications"
+    ],
+    "behavioral_indicators": {
+      "error_events": {
+        "threshold": 5,
+        "direction": "above"
+      },
+      "error_rate": {
+        "threshold": 0.8,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["any_user"],
+      "expected_from": [],
+      "persona_note": "Multiple authentication failures from same source indicates password guessing regardless of usual user behavior."
+    },
+    "embedding_description": "Multiple ConsoleLogin attempts fail with error responses before a successful authentication from the same IP address. The error_rate approaches 0.8 with error_events exceeding 5 failed attempts. This pattern indicates brute force password guessing or credential stuffing attacks where attackers systematically try username-password combinations. A successful login following failures suggests credential compromise. Legitimate users occasionally mistype passwords but rarely exceed three failures before calling help desk."
+  },
+  {
+    "pattern_id": "IOC-IAM-009",
+    "name": "User or Role Created Outside IaC",
+    "description": "Detects IAM user or role creation that doesn't match Infrastructure as Code patterns, potentially indicating unauthorized account creation.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["CreateUser", "CreateRole"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, eventName, requestParameters.userName, requestParameters.roleName, userAgent FROM cloudtrail_logs WHERE eventName IN ('CreateUser', 'CreateRole') AND userAgent NOT LIKE '%Terraform%' AND userAgent NOT LIKE '%CloudFormation%' AND userAgent NOT LIKE '%aws-cli%' AND errorCode IS NULL",
+    "sigma_rule": "title: AWS IAM Entity Created Manually\nstatus: experimental\ndescription: Detects IAM user/role creation outside automation\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'CreateUser'\n      - 'CreateRole'\n  filter:\n    userAgent|contains:\n      - 'Terraform'\n      - 'CloudFormation'\n  condition: selection and not filter\nlevel: medium",
+    "threshold": 1,
+    "time_window_minutes": 60,
+    "anomaly_score_threshold": 0.65,
+    "techniques_detected": ["T1136"],
+    "triggers_playbook": ["IR-IAM-002"],
+    "false_positives": [
+      "Emergency manual user creation during outage",
+      "Small organizations without IaC maturity",
+      "Testing/troubleshooting IAM policies"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "iam_write_ratio": {
+        "threshold": 0.4,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst"],
+      "expected_from": ["iac_pipeline", "admin"],
+      "persona_note": "IAM entity creation by developers whose IAM write activity is zero indicates unauthorized persistence mechanism."
+    },
+    "embedding_description": "User manually creates IAM users or roles via CreateUser or CreateRole operations outside Infrastructure as Code workflows. The iam_write_ratio exceeds 0.4 with elevated iam_write_events. This pattern indicates an attacker establishing persistence by creating backdoor accounts after initial compromise. Attackers create new IAM entities with known credentials for continued access even if original entry point is discovered. Organizations using IaC expect all IAM changes through version-controlled deployments. Manual IAM creation bypasses code review and audit trails."
+  },
+  {
+    "pattern_id": "IOC-LAMBDA-001",
+    "name": "Lambda Function Creation with External Access",
+    "description": "Detects creation of Lambda functions with resource-based policies allowing external account invocation, which may be used for backdoor access or data exfiltration.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["CreateFunction", "AddPermission"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, requestParameters.functionName, requestParameters.principal, requestParameters.sourceAccount FROM cloudtrail_logs WHERE eventName IN ('CreateFunction', 'AddPermission') AND requestParameters.principal NOT LIKE '%amazonaws.com' AND errorCode IS NULL",
+    "sigma_rule": "title: AWS Lambda External Access\nstatus: experimental\ndescription: Detects Lambda functions with external permissions\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName:\n      - 'CreateFunction'\n      - 'AddPermission'\n  condition: selection\nlevel: high",
+    "threshold": 1,
+    "time_window_minutes": 60,
+    "anomaly_score_threshold": 0.75,
+    "techniques_detected": ["T1537"],
+    "triggers_playbook": ["IR-LAMBDA-001"],
+    "false_positives": [
+      "API Gateway Lambda integrations",
+      "S3 event notifications",
+      "SNS/SQS event sources",
+      "Legitimate cross-account Lambda invocations"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "write_ratio": {
+        "threshold": 0.3,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst"],
+      "expected_from": ["iac_pipeline", "admin"],
+      "persona_note": "Lambda function creation with external access by developers whose write activity is normally zero indicates backdoor establishment."
+    },
+    "embedding_description": "User creates Lambda functions or adds permissions via CreateFunction and AddPermission allowing external AWS account invocation. The write_ratio exceeds 0.3 with elevated iam_write_events. This backdoor technique enables attackers to establish serverless persistence where external accounts can invoke functions for command execution or data exfiltration. Lambda functions execute with IAM roles potentially granting broad environment access. Legitimate external Lambda invocations occur through API Gateway integrations or event sources with proper authorization. Manual permission grants bypassing IaC are suspicious."
+  },
+  {
+    "pattern_id": "IOC-S3-003",
+    "name": "Gradual S3 Data Exfiltration",
+    "description": "Detects sustained increase in S3 GetObject operations over time indicating slow-and-low data exfiltration to avoid detection thresholds.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["GetObject"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT userIdentity.principalId, date_trunc('day', eventTime) as day, count(*) as get_count FROM cloudtrail_logs WHERE eventName = 'GetObject' AND eventTime > date_add('day', -7, current_timestamp) GROUP BY 1, 2 ORDER BY 1, 2",
+    "sigma_rule": "title: AWS S3 Gradual Data Access Increase\nstatus: experimental\ndescription: Detects trending increase in S3 access\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName: 'GetObject'\n  condition: selection\nlevel: high",
+    "threshold": 100,
+    "time_window_minutes": 5,
+    "anomaly_score_threshold": 0.75,
+    "techniques_detected": ["T1537"],
+    "triggers_playbook": ["IR-S3-001"],
+    "false_positives": [
+      "Application scaling gradually increasing load",
+      "Data analytics workloads expanding scope",
+      "Backup operations with retention expansion"
+    ],
+    "behavioral_indicators": {
+      "s3_get_events": {
+        "threshold": 100,
+        "direction": "above"
+      },
+      "s3_get_slope_3d": {
+        "threshold": 15.0,
+        "direction": "above"
+      },
+      "s3_get_events_zscore": {
+        "threshold": 2.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "any_non_data_role"],
+      "expected_from": ["data_analyst", "backup_service"],
+      "persona_note": "Increasing S3 access by developers whose S3 activity is normally flat indicates gradual data theft avoiding spike detection."
+    },
+    "embedding_description": "User performs GetObject operations with volume steadily increasing over days. The s3_get_slope_3d exceeds 15.0 indicating positive linear trend with s3_get_events above 100 per window. This slow exfiltration technique avoids triggering sudden volume spikes by gradually ramping up data access. Attackers use this to extract large datasets while staying under absolute thresholds. The 3-day slope calculation detects the trending increase. Legitimate S3 access patterns show stable volumes or correspond to known application scaling events."
+  },
+  {
+    "pattern_id": "IOC-IAM-010",
+    "name": "IAM Enumeration by Non-Administrative User",
+    "description": "Detects extensive IAM list operations by users without administrative roles, indicating reconnaissance for privilege escalation paths.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["List*", "Get*"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT userIdentity.principalId, count(*) as list_count, array_agg(DISTINCT eventName) as events FROM cloudtrail_logs WHERE (eventName LIKE 'List%' OR eventName LIKE 'Get%') AND eventsource = 'iam.amazonaws.com' AND eventTime > date_add('minute', -15, current_timestamp) GROUP BY 1 HAVING list_count > 15",
+    "sigma_rule": "title: AWS IAM Enumeration\nstatus: experimental\ndescription: Detects IAM-focused reconnaissance\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventName|startswith:\n      - 'List'\n      - 'Get'\n    eventsource: 'iam.amazonaws.com'\n  timeframe: 15m\n  condition: selection | count(by userIdentity.principalId) > 15\nlevel: medium",
+    "threshold": 15,
+    "time_window_minutes": 15,
+    "anomaly_score_threshold": 0.7,
+    "techniques_detected": ["T1087"],
+    "triggers_playbook": ["IR-IAM-004"],
+    "false_positives": [
+      "Security team auditing IAM configurations",
+      "Compliance scanning tools",
+      "New admin learning environment structure"
+    ],
+    "behavioral_indicators": {
+      "iam_list_events": {
+        "threshold": 15,
+        "direction": "above"
+      },
+      "iam_ratio": {
+        "threshold": 0.6,
+        "direction": "above"
+      },
+      "iam_list_events_zscore": {
+        "threshold": 3.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst"],
+      "expected_from": ["security_engineer", "admin"],
+      "persona_note": "IAM enumeration by developers whose IAM activity is zero indicates attacker mapping privilege escalation opportunities."
+    },
+    "embedding_description": "User performs extensive IAM-focused List and Get operations exploring users roles policies and permissions. The iam_list_events exceeds 15 with iam_ratio above 0.6 and z-score over 3.5. Attackers enumerate IAM to identify overprivileged roles misconfigured trust policies or paths to escalate from low-privilege compromised accounts. This reconnaissance precedes privilege escalation or lateral movement attacks. Legitimate IAM enumeration occurs during security audits by authorized personnel. Developers investigating permission issues check specific policies not exhaustive sweeps."
+  },
+  {
+    "pattern_id": "IOC-IAM-011",
+    "name": "Off-Hours IAM Write Operations",
+    "description": "Detects IAM modification operations during non-business hours when such activity is unusual, indicating compromised credentials or insider threat.",
+    "severity": "High",
+    "cloudtrail_event_patterns": {
+      "eventName": ["Put*", "Create*", "Delete*", "Update*", "Attach*", "Detach*"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT eventTime, userIdentity.principalId, eventName, hour(eventTime) as event_hour FROM cloudtrail_logs WHERE eventsource = 'iam.amazonaws.com' AND eventName RLIKE '(Put|Create|Delete|Update|Attach|Detach)' AND (hour(eventTime) < 6 OR hour(eventTime) > 22) AND errorCode IS NULL",
+    "sigma_rule": "title: AWS Off-Hours IAM Changes\nstatus: experimental\ndescription: Detects IAM modifications during unusual hours\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    eventsource: 'iam.amazonaws.com'\n    eventName|startswith:\n      - 'Put'\n      - 'Create'\n      - 'Delete'\n      - 'Update'\n      - 'Attach'\n      - 'Detach'\n  time_filter:\n    eventTime|hour:\n      - 0-5\n      - 23\n  condition: selection and time_filter\nlevel: high",
+    "threshold": 1,
+    "time_window_minutes": 5,
+    "anomaly_score_threshold": 0.8,
+    "techniques_detected": ["T1098"],
+    "triggers_playbook": ["IR-IAM-002"],
+    "false_positives": [
+      "On-call engineers performing emergency changes",
+      "Global teams operating across time zones",
+      "Automated IaC deployments scheduled at night"
+    ],
+    "behavioral_indicators": {
+      "iam_write_events": {
+        "threshold": 1,
+        "direction": "above"
+      },
+      "after_hours_ratio": {
+        "threshold": 0.8,
+        "direction": "above"
+      },
+      "iam_write_events_zscore": {
+        "threshold": 3.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst", "any_business_hours_user"],
+      "expected_from": ["iac_pipeline"],
+      "persona_note": "IAM changes at 3AM by developers who work 9-5 indicates compromised credentials used by attackers in different timezone."
+    },
+    "embedding_description": "User performs IAM write operations like CreateUser AttachPolicy or PutUserPolicy during off-business hours when the user normally works 9-5. The after_hours_ratio exceeds 0.8 with iam_write_events above baseline and z-score over 3.0. Attackers often operate outside victim organization business hours to reduce detection risk. Compromised credentials from daytime workers used at night indicates threat actor activity. Legitimate off-hours IAM changes occur during emergencies with documentation or via scheduled automation. Manual IAM modifications at unusual hours warrant investigation."
+  },
+  {
+    "pattern_id": "IOC-IAM-012",
+    "name": "High API Error Rate",
+    "description": "Detects elevated error rates indicating permission enumeration, failed privilege escalation attempts, or misconfigured automation.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["*"],
+      "errorCode": ["AccessDenied", "UnauthorizedOperation", "Forbidden"]
+    },
+    "athena_query": "SELECT userIdentity.principalId, count(*) as error_count, count(*) * 1.0 / (SELECT count(*) FROM cloudtrail_logs WHERE userIdentity.principalId = outer.userIdentity.principalId AND eventTime > date_add('minute', -15, current_timestamp)) as error_rate FROM cloudtrail_logs outer WHERE errorCode IN ('AccessDenied', 'UnauthorizedOperation', 'Forbidden') AND eventTime > date_add('minute', -15, current_timestamp) GROUP BY 1 HAVING error_count > 20",
+    "sigma_rule": "title: AWS High Error Rate\nstatus: experimental\ndescription: Detects excessive access denied errors\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    errorCode:\n      - 'AccessDenied'\n      - 'UnauthorizedOperation'\n      - 'Forbidden'\n  timeframe: 15m\n  condition: selection | count(by userIdentity.principalId) > 20\nlevel: medium",
+    "threshold": 20,
+    "time_window_minutes": 15,
+    "anomaly_score_threshold": 0.65,
+    "techniques_detected": ["T1078"],
+    "triggers_playbook": ["IR-IAM-004"],
+    "false_positives": [
+      "Misconfigured application deployment",
+      "Permission changes breaking existing automation",
+      "New user learning CLI / SDK"
+    ],
+    "behavioral_indicators": {
+      "error_events": {
+        "threshold": 20,
+        "direction": "above"
+      },
+      "error_rate": {
+        "threshold": 0.5,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["any_user"],
+      "expected_from": [],
+      "persona_note": "Error rates above 50% indicate permission enumeration where attacker systematically tests API calls to map actual privileges."
+    },
+    "embedding_description": "User generates high volume of AccessDenied and authorization errors across API calls. The error_rate exceeds 0.5 with error_events above 20 failures. Attackers enumerate permissions by systematically calling APIs to determine which operations are allowed after compromising low-privilege credentials. This reconnaissance identifies privilege escalation paths. The error pattern shows trial-and-error exploration. Legitimate access denied errors occur when applications encounter permission issues but error rates stay low. Sustained high error rates indicate malicious permission probing or severely broken automation requiring investigation."
+  },
+  {
+    "pattern_id": "IOC-BEHAV-001",
+    "name": "User-Type Service Mismatch",
+    "description": "Detects users accessing services inconsistent with their typical behavior, indicating lateral movement or compromised service accounts.",
+    "severity": "Medium",
+    "cloudtrail_event_patterns": {
+      "eventName": ["*"],
+      "errorCode": null
+    },
+    "athena_query": "SELECT userIdentity.principalId, eventsource, count(*) as call_count FROM cloudtrail_logs WHERE eventTime > date_add('minute', -60, current_timestamp) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+    "sigma_rule": "title: AWS User Service Behavior Anomaly\nstatus: experimental\ndescription: Detects unusual service access patterns\nlogsource:\n  product: aws\n  service: cloudtrail\ndetection:\n  selection:\n    # Requires behavioral baseline\n  condition: selection\nlevel: medium",
+    "threshold": 10,
+    "time_window_minutes": 60,
+    "anomaly_score_threshold": 0.7,
+    "techniques_detected": ["T1078"],
+    "triggers_playbook": ["IR-IAM-001"],
+    "false_positives": [
+      "Users learning new tools or services",
+      "Role changes or promotions",
+      "Cross-training activities",
+      "Incident response investigations"
+    ],
+    "behavioral_indicators": {
+      "iam_ratio": {
+        "threshold": 0.5,
+        "direction": "above"
+      },
+      "iam_events_zscore": {
+        "threshold": 4.0,
+        "direction": "above"
+      }
+    },
+    "user_context": {
+      "anomalous_for": ["developer", "data_analyst"],
+      "expected_from": ["admin", "security_engineer"],
+      "persona_note": "Data analysts suddenly making IAM calls or developers accessing KMS indicates compromised account lateral movement."
+    },
+    "embedding_description": "User accesses AWS services outside their historical usage patterns. A data analyst who normally queries only RDS and S3 suddenly makes IAM API calls. The iam_ratio jumps to 0.5 when user baseline is zero IAM activity with z-score exceeding 4.0. This behavioral anomaly indicates compromised credentials used by attackers exploring environment differently than legitimate user. Attackers lack knowledge of proper role-based service usage showing abnormal access patterns. Legitimate service exploration occurs when users document learning activities or role changes. Sudden unexplained service mismatches warrant credential verification."
+  }
+]

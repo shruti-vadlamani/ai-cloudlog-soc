@@ -1,0 +1,147 @@
+==========================================================================================
+SOC AUTOMATED INCIDENT ANALYSIS REPORT
+==========================================================================================
+Generated:  2026-03-01 22:11:47
+Duration:   2.9s
+Alerts:     5
+==========================================================================================
+
+==========================================================================================
+INCIDENT #1 | HIGH | User: bob-devops | Score: 0.8219
+Window: 2026-02-27 11:35:00+00:00
+Models fired: LOF(1.000), Autoencoder(0.998)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+  IR-DESTRUCT-001: Mass Deletion / Data Destruction Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.652: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.65: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+(LLM unavailable — enable Ollama: ollama serve && ollama pull phi3.5:3.8b)
+
+
+==========================================================================================
+INCIDENT #2 | HIGH | User: bob-devops | Score: 0.7845
+Window: 2026-02-27 11:25:00+00:00
+Models fired: IsolationForest(0.718), LOF(0.668), Autoencoder(0.997)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.659: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.656: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+(LLM unavailable — enable Ollama: ollama serve && ollama pull phi3.5:3.8b)
+
+
+==========================================================================================
+INCIDENT #3 | HIGH | User: bob-devops | Score: 0.7788
+Window: 2026-02-27 11:20:00+00:00
+Models fired: IsolationForest(0.716), LOF(0.652), Autoencoder(1.000)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.656: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.654: User bob-devops at 2026-02-27 11:15:00+00:00 performed 6 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+(LLM unavailable — enable Ollama: ollama serve && ollama pull phi3.5:3.8b)
+
+
+==========================================================================================
+INCIDENT #4 | HIGH | User: bob-devops | Score: 0.7748
+Window: 2026-02-27 11:15:00+00:00
+Models fired: IsolationForest(0.575), LOF(0.782), Autoencoder(1.000)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.667: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.665: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+(LLM unavailable — enable Ollama: ollama serve && ollama pull phi3.5:3.8b)
+
+
+==========================================================================================
+INCIDENT #5 | HIGH | User: bob-devops | Score: 0.7584
+Window: 2026-02-27 11:30:00+00:00
+Models fired: IsolationForest(0.708), LOF(0.603), Autoencoder(0.999)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.653: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.651: User bob-devops at 2026-02-27 11:15:00+00:00 performed 6 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+(LLM unavailable — enable Ollama: ollama serve && ollama pull phi3.5:3.8b)

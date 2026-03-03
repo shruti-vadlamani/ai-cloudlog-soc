@@ -1,0 +1,257 @@
+# ============================================================
+# SOC Project - Simulation Configuration
+# All tunable parameters live here. Do not hardcode these
+# values anywhere else in the codebase.
+# ============================================================
+
+aws:
+  account_id: "911234567890"
+  region: "ap-south-1"
+  log_bucket: "soc-cloudtrail-logs"
+
+simulation:
+  # 14 days ending today (2026-03-01)
+  start_date: "2026-02-15"
+  end_date: "2026-03-01"
+  target_total_events: 18000
+  timezone: "Asia/Kolkata"  # IST — affects business hours realism
+
+output:
+  raw_log_dir: "data/raw"
+  normalized_dir: "data/normalized"
+  features_dir: "data/features"
+  labels_dir: "data/labels"
+  ground_truth_file: "ground_truth/attack_manifest.json"
+
+# ============================================================
+# PERSONAS
+# Each persona defines a realistic AWS user archetype.
+# activity_weight: relative share of total events
+# working_hours: [start_hour, end_hour] in IST (24h)
+# services: weighted map of event_source -> relative frequency
+# ============================================================
+personas:
+  - name: "alice"
+    role: "developer"
+    iam_username: "alice-dev"
+    activity_weight: 0.22
+    working_hours: [9, 19]
+    user_agent_style: "aws-cli"
+    source_ip_prefix: "103.21.244"
+    error_rate: 0.04
+    services:
+      s3: 0.40
+      lambda: 0.20
+      iam: 0.08
+      cloudwatch: 0.15
+      ec2: 0.10
+      cloudtrail: 0.07
+
+  - name: "bob"
+    role: "devops"
+    iam_username: "bob-devops"
+    activity_weight: 0.20
+    working_hours: [8, 20]
+    user_agent_style: "aws-cli"
+    source_ip_prefix: "103.21.245"
+    error_rate: 0.03
+    services:
+      s3: 0.30
+      ec2: 0.25
+      cloudwatch: 0.20
+      iam: 0.10
+      lambda: 0.10
+      cloudtrail: 0.05
+
+  - name: "carol"
+    role: "security"
+    iam_username: "carol-sec"
+    activity_weight: 0.15
+    working_hours: [9, 18]
+    user_agent_style: "console"
+    source_ip_prefix: "103.21.246"
+    error_rate: 0.02
+    services:
+      iam: 0.45
+      cloudtrail: 0.25
+      cloudwatch: 0.15
+      s3: 0.10
+      ec2: 0.05
+
+  - name: "dave"
+    role: "admin"
+    iam_username: "dave-admin"
+    activity_weight: 0.15
+    working_hours: [9, 18]
+    user_agent_style: "console"
+    source_ip_prefix: "103.21.247"
+    error_rate: 0.02
+    services:
+      iam: 0.50
+      s3: 0.20
+      ec2: 0.15
+      cloudwatch: 0.10
+      cloudtrail: 0.05
+
+  - name: "eve"
+    role: "data_analyst"
+    iam_username: "eve-analyst"
+    activity_weight: 0.13
+    working_hours: [10, 18]
+    user_agent_style: "boto3"
+    source_ip_prefix: "103.21.248"
+    error_rate: 0.05
+    services:
+      s3: 0.70          # Eve mostly reads S3 data
+      cloudwatch: 0.15
+      iam: 0.02         # Very rare — key for recon attack detection
+      ec2: 0.08
+      cloudtrail: 0.05
+
+  - name: "cicd-bot"
+    role: "automation"
+    iam_username: "cicd-service-account"
+    activity_weight: 0.15
+    working_hours: [0, 24]   # Runs all hours
+    user_agent_style: "boto3"
+    source_ip_prefix: "10.0.1"   # Internal CI runner
+    error_rate: 0.01
+    services:
+      s3: 0.45
+      lambda: 0.25
+      cloudwatch: 0.20
+      iam: 0.05
+      ec2: 0.05
+
+# ============================================================
+# S3 BUCKETS — shared resources personas interact with
+# ============================================================
+s3_buckets:
+  - name: "company-data-lake-prod"
+    typical_users: ["alice-dev", "bob-devops", "eve-analyst", "cicd-service-account"]
+    sensitivity: "high"
+  - name: "company-app-assets"
+    typical_users: ["alice-dev", "bob-devops", "cicd-service-account"]
+    sensitivity: "medium"
+  - name: "company-logs-archive"
+    typical_users: ["carol-sec", "dave-admin", "bob-devops"]
+    sensitivity: "medium"
+  - name: "company-backups"
+    typical_users: ["dave-admin", "cicd-service-account"]
+    sensitivity: "high"
+  - name: "company-public-assets"
+    typical_users: ["alice-dev", "cicd-service-account"]
+    sensitivity: "low"
+
+# ============================================================
+# ATTACK SCENARIOS
+# Timestamps are in IST. These are injected on top of normal
+# traffic by attack_injector.py.
+# ground_truth label values: 1=privilege_escalation,
+# 2=data_exfiltration, 3=insider_threat,
+# 4=reconnaissance, 5=backdoor_creation
+# ============================================================
+attacks:
+  - id: 1
+    name: "privilege_escalation"
+    label: 1
+    actor: "alice-dev"          # Developer account gets compromised
+    start_datetime: "2026-02-17 02:00:00"  # Week 1, Tuesday 2 AM IST
+    duration_minutes: 25
+    description: >
+      Compromised developer account suddenly creates access key,
+      attaches admin policy, then creates a new IAM user.
+      Classic privilege escalation chain.
+
+  - id: 2
+    name: "data_exfiltration"
+    label: 2
+    actor: "eve-analyst"        # Analyst account doing gradual exfil
+    start_datetime: "2026-02-23 10:00:00"  # Week 2, Monday morning
+    end_datetime: "2026-02-25 18:00:00"    # Through Wednesday
+    duration_minutes: 4320      # 3 days, gradual volume ramp
+    description: >
+      Gradual increase in S3 GetObject calls: 50% above baseline
+      on Monday, 100% on Tuesday, 200% on Wednesday.
+      Spread across business hours to avoid spike detection.
+
+  - id: 3
+    name: "insider_threat"
+    label: 3
+    actor: "bob-devops"         # Disgruntled DevOps before weekend
+    start_datetime: "2026-02-27 16:45:00"  # Week 2, Friday 4:45 PM IST
+    duration_minutes: 30
+    description: >
+      Bulk DeleteObject calls followed by DeleteBucket.
+      Destructive action spike right before the weekend.
+
+  - id: 4
+    name: "reconnaissance"
+    label: 4
+    actor: "eve-analyst"        # Data analyst making IAM discovery calls
+    start_datetime: "2026-02-18 11:00:00"  # Week 1, Wednesday
+    end_datetime: "2026-02-20 16:00:00"    # Through Friday, spread out
+    duration_minutes: 1800      # spread across 3 days
+    description: >
+      Eve (data analyst) makes ListUsers, ListRoles, ListPolicies,
+      GetAccountAuthorizationDetails calls — IAM resources she
+      never normally touches. Spread across 3 days to avoid spikes.
+
+  - id: 5
+    name: "backdoor_creation"
+    label: 5
+    actor: "eve-analyst"        # Non-admin creating backdoor
+    start_datetime: "2026-02-25 03:15:00"  # Week 2, Wednesday 3:15 AM IST
+    duration_minutes: 20
+    description: >
+      Non-admin user creates login profile and access key for
+      another existing user (dave-admin). Happens at 3 AM.
+
+# ============================================================
+# TEMPORAL DISTRIBUTION PARAMETERS
+# ============================================================
+temporal:
+  # Probability multipliers by hour of day (IST, 0-23)
+  # Business hours spike, night near-zero (except cicd-bot)
+  hourly_weights:
+    0: 0.02
+    1: 0.01
+    2: 0.01
+    3: 0.01
+    4: 0.01
+    5: 0.02
+    6: 0.05
+    7: 0.08
+    8: 0.12
+    9: 0.18
+    10: 0.22
+    11: 0.25
+    12: 0.15   # lunch dip
+    13: 0.20
+    14: 0.28
+    15: 0.30
+    16: 0.28
+    17: 0.25
+    18: 0.18
+    19: 0.12
+    20: 0.08
+    21: 0.05
+    22: 0.03
+    23: 0.02
+
+  # Day-of-week multipliers (0=Monday)
+  daily_weights:
+    0: 1.20   # Monday spike
+    1: 1.10
+    2: 1.00
+    3: 1.00
+    4: 0.85   # Friday lighter
+    5: 0.15   # Saturday minimal (cicd only)
+    6: 0.10   # Sunday minimal (cicd only)
+
+# ============================================================
+# EVENT MIX TARGETS
+# ============================================================
+event_mix:
+  iam_and_s3_fraction: 0.75    # 70-80% target
+  other_services_fraction: 0.25 # 20-30% for realism

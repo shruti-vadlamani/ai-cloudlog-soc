@@ -1,0 +1,207 @@
+==========================================================================================
+SOC AUTOMATED INCIDENT ANALYSIS REPORT
+==========================================================================================
+Generated:  2026-03-02 00:08:50
+Duration:   668.6s
+Alerts:     5
+==========================================================================================
+
+==========================================================================================
+INCIDENT #1 | HIGH | User: bob-devops | Score: 0.8219
+Window: 2026-02-27 11:35:00+00:00
+Models fired: LOF(1.000), Autoencoder(0.998)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+  IR-DESTRUCT-001: Mass Deletion / Data Destruction Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.652: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.65: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+1. Most likely attack classification and reasoning: The alert suggests a data exfiltration attempt, potentially by an insider threat or compromised account due to the high ensemble score from anomaly detection models (LOF and Autoencoder) indicating abnormal behavior in S3 delete events with z-score of 10. This aligns closely with past incidents involving similar patterns where a user performed suspicious activities within short time frames, suggesting either malice or compromise rather than legitimate access needs.
+
+2. Top immediate actions for the analyst:
+   - Immediately revoke all IAM credentials associated with 'bob-devops' to prevent further unauthorized activity (using `aws iam update-access-key`).
+   - Force a password reset and require multi-factor authentication on this account (`aws iam update-login-profile`), ensuring that the current login details are secure.
+   - Conduct an immediate audit of all S3 bucket permissions to identify any unauthorized access or policy misconfigurations, particularly for delete operations (LOF model firing).
+   
+3. Key investigation questions:
+   - Can we trace back and verify the source IP address used during this suspicious login attempt? This will help determine if it's from a known location or an anomaly in itself.
+   - Has 'bob-devops' logged into AWS resources using these credentials before, indicating potential account compromise rather than legitimate use patterns (referencing past incidents for comparison).
+   - What specific S3 objects were accessed immediately after the suspicious login event to understand if sensitive data was targeted or exfiltrated.
+   
+4. Risk if unaddressed: Unchecked, this could lead to significant confidential information loss and potential financial damage due to insider threat misuse of AWS resources (data breach risk).
+
+
+==========================================================================================
+INCIDENT #2 | HIGH | User: bob-devops | Score: 0.7845
+Window: 2026-02-27 11:25:00+00:00
+Models fired: IsolationForest(0.718), LOF(0.668), Autoencoder(0.997)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.659: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.656: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+1. **Attack Classification and Reasoning:** The attack is likely a case of account compromise leading to data exfiltration, as indicated by the high ensemble score from anomaly detection models (Autoencoder at 0.997), which suggests non-random behavior consistent with an intruder's actions rather than legitimate user activity. Key indicators include unusually large S3 delete events and IAM role assumption patterns that match known tactics like T1530 for data exfiltration, combined with the potential privilege escalation via unusual account usage (T1078).
+
+2. **Top 3 Immediate Actions:**
+   - Disable all access keys associated with bob-devops to prevent further unauthorized actions and limit damage (`aws iam update-access-key --user-name <COMPROMISED_USER>`).
+   - Reset the compromised user's console password, requiring multi-factor authentication (MFA) on login for additional security layers against future breaches.
+   - Conduct a thorough audit of all IAM roles and policies to identify any misconfigurations or excessive permissions that could have facilitated this attack pattern (`aws iam list-permissions --user`).
+   
+3. **Key Investigation Questions:**
+   - Can the source IP address be traced back, confirming if it matches known locations of bob-devops' previous activity or indicating a new threat actor?
+   - Was there any prior indication that this account was compromised before today’s events (e.g., suspicious login patterns in logs)?
+   - What resources were accessed immediately after the authentication, and do these align with expected job functions for bob-devops or suggest data scraping activities?
+   
+4. **Risk if Unaddressed:** If unchecked, this account compromise could lead to significant confidentiality breaches as sensitive information may be exfiltrated without detection due to the sophistication of these tactics and potential for continued unauthorized access within AWS environment (data loss or leakage).
+   
+This analysis is specific to an incident involving bob-devops, with actions tailored towards mitigating risks associated with compromised accounts on Amazon Web Services. The immediate steps
+
+
+==========================================================================================
+INCIDENT #3 | HIGH | User: bob-devops | Score: 0.7788
+Window: 2026-02-27 11:20:00+00:00
+Models fired: IsolationForest(0.716), LOF(0.652), Autoencoder(1.000)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.656: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.654: User bob-devops at 2026-02-27 11:15:00+00:00 performed 6 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+1. Most likely attack classification and reasoning: The alert suggests a data exfiltration attempt, possibly by an insider threat or compromised account due to the high ensemble score from anomaly detection models (Autoencoder at perfect match) combined with MITRE ATT&CK tactics T1078 (Valid Accounts), T1530 (Data Exfiltration via Cloud Storage). The behavioral signals, such as unusually large S3 delete events and IAM role assumption without prior history of similar activity, further support this classification.
+
+2. Top 3 immediate actions for the analyst:
+   a. Immediately disable all access keys associated with bob-devops to prevent any additional unauthorized activities using AWS Identity and Access Management (IAM). This can be done by executing `aws iam update-access-key --user-name <COMPROMISED_USER>`.
+   b. Reset the compromised user's console password, requiring Multi-Factor Authentication (MFA) for further logins to add an additional layer of security and mitigate unauthorized access risk (`aws iam update-login-profile --user-name <COMPROMISED_USER>`).
+   c. Conduct a thorough investigation into the account's recent activities, including reviewing all associated IAM policies for potential misconfigurations or granted permissions that are not required and auditing S3 bucket access logs to identify any data exfiltration patterns (e.g., large deletions).
+
+3. Key investigation questions:
+   a. Can the source IP address of this suspicious login be identified, which would help determine if it matches known malicious sources or is from within AWS's network?
+   b. Has user 'bob-devops' logged in with their credentials previously and what was unusual about these activities compared to past behavior (e.g., time spent on the account)?
+   c. What resources did this compromised session access immediately after authentication, which might indicate exfiltration attempts or data scraping?
+   
+4. Risk if unaddressed: Unchecked continued unauthorized activities could lead to significant loss of sensitive information and potential financial damage due to intellectual property theft; furthermore, it may provide attackers with a foothold for more severe
+
+
+==========================================================================================
+INCIDENT #4 | HIGH | User: bob-devops | Score: 0.7748
+Window: 2026-02-27 11:15:00+00:00
+Models fired: IsolationForest(0.575), LOF(0.782), Autoencoder(1.000)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.667: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.665: User bob-devops at 2026-02-27 11:40:00+00:00 performed 4 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+1. Most likely attack classification: The alert suggests a data exfiltration attempt, potentially leveraging valid account credentials for unauthorized access and subsequent S3 mass deletion activities—indicative of an insider threat or credential compromise (T1530). Given the high ensemble score from anomaly detection models like Autoencoder and LOF, along with MITRE ATT&CK tactics T1078 and gradual exfiltration patterns matching past incidents.
+
+2. Top 3 immediate actions:
+   a. Immediately revoke the compromised IAM access keys for 'bob-devops' using `aws iam update-access-key` to prevent further unauthorized use of these credentials within AWS resources, as they are likely being used maliciously or by an attacker with stolen account details.
+   b. Force a password reset and mandate multi-factor authentication (MFA) for the 'bob-devops' IAM user to prevent immediate reauthentication using potentially compromised credentials (`aws iam update-login-profile`). This adds another layer of security, making unauthorized access significantly harder even if account details are known.
+   c. Conduct an in-depth audit and review all recent AWS activities associated with 'bob-devops', focusing on S3 bucket permissions changes or unusual data retrieval patterns to assess the extent of potential exfiltration, using tools like Amazon Inspector for detailed analysis if necessary (e.g., `aws inspector start-assessment`).
+
+3. Key investigation questions:
+   a. Can we trace back and confirm whether 'bob-devops' has used these credentials outside of the observed time window or from unfamiliar geographic locations? This could indicate account misuse beyond internal access patterns, suggesting credential compromise (Q).
+   b. What specific AWS resources were accessed immediately after authentication by this user to understand potential targets for data exfiltration further and identify if any sensitive information was retrieved (`DescribeInstances` or `S3 Bucket Metrics`). This helps in understanding the scope of breach ('What resources did the user access?').
+   c. Were there recent changes made by 'bob-devops' to IAM policies, roles, and permissions that could have
+
+
+==========================================================================================
+INCIDENT #5 | HIGH | User: bob-devops | Score: 0.7584
+Window: 2026-02-27 11:30:00+00:00
+Models fired: IsolationForest(0.708), LOF(0.603), Autoencoder(0.999)
+──────────────────────────────────────────────────────────────────────────────────────────
+MITRE TECHNIQUES:
+  T1078: Valid Accounts [defense-evasion, persistence, privilege-escalation, initial-access]
+  T1199: Trusted Relationship [initial-access]
+  T1530: Data from Cloud Storage [collection]
+DETECTION PATTERNS:
+  [High] Unusual IAM Role Assumption | match=0.7 | cloudtrail_event_match
+  [High] Mass S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+  [High] Gradual S3 Data Exfiltration | match=0.7 | cloudtrail_event_match
+PLAYBOOKS TRIGGERED:
+  IR-IAM-001: Compromised Credentials - Initial Response
+  IR-S3-001: S3 Data Exfiltration Response
+ATTACK CHAIN (proactive):
+  IR-S3-001: T1078 commonly enables T1530 (Data from Cloud Storage)
+  IR-IAM-002: T1078 commonly enables T1098 (Account Manipulation)
+  IR-ENUM-001: T1078 commonly enables T1526 (Cloud Service Discovery)
+SIMILAR PAST INCIDENTS:
+  [insider_threat] similarity=0.653: User bob-devops at 2026-02-27 11:35:00+00:00 performed 3 total events in 5 minutes. S3 GetObject: 0 
+  [insider_threat] similarity=0.651: User bob-devops at 2026-02-27 11:15:00+00:00 performed 6 total events in 5 minutes. S3 GetObject: 0 
+──────────────────────────────────────────────────────────────────────────────────────────
+LLM ANALYSIS:
+1. Most likely attack classification: The alert suggests a data exfiltration attempt, potentially linked with privilege escalation and initial access via valid account manipulation (MITRE ATT&CK techniques T1078). Given the high ensemble score from anomaly detection models like IsolationForest and Autoencoder, which are sensitive to deviations in normal patterns of behavior such as excessive S3 delete events combined with IAM role assumption signals.
+
+2. Top 3 immediate actions:
+   - Immediately revoke all access keys for the compromised user (bob-devops) using `aws iam update-access-key`. This will halt any further unauthorized use of these credentials and prevent potential lateral movement within AWS resources by an attacker.
+   - Force a password reset along with mandatory MFA activation to ensure that the compromised account cannot be used without additional verification, adding another layer of security (aws iam update-login-profile). This reduces risk even if access keys are reused or obtained elsewhere.
+   - Conduct an immediate investigation into all IAM role assumptions and S3 delete events by bob-devops to understand the scope of potential data exfiltration, while also examining network logs for signs of lateral movement within AWS infrastructure (e.g., VPC traffic anomalies).
+   
+3. Key Investigation Questions:
+   - Can we trace back and identify any suspicious IP addresses associated with bob-devops' account activity? This will help confirm if the login originated from an unexpected geographic location or source, which is a red flag for credential misuse (Q).
+   - Did this user previously access AWS resources in ways that are inconsistent with their normal behavior patterns before today’s events began to unfold at 11:30 AM UTC? This can help determine if the account was compromised or used by an insider, potentially validating false positive scenarios (Q).
+   - What specific IAM roles and S3 buckets were accessed immediately following authentication that could indicate data exfiltration intentions—specifically those with sensitive content not regularly required for bob-devops' job functions? This can confirm the targeted nature of these actions beyond mere anomaly (Q).
+   
+4. Risk if unaddressed: Unatt

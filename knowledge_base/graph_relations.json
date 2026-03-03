@@ -1,0 +1,968 @@
+[
+  {
+    "relationship_id": "REL-DETECT-001",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-DETECT-002",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-004",
+    "target_type": "DetectionPattern",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-DETECT-003",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-006",
+    "target_type": "DetectionPattern",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-DETECT-004",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-007",
+    "target_type": "DetectionPattern",
+    "confidence": 0.98
+  },
+  {
+    "relationship_id": "REL-DETECT-005",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-002",
+    "target_type": "DetectionPattern",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-DETECT-006",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-003",
+    "target_type": "DetectionPattern",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-DETECT-007",
+    "source_entity": "T1530",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-S3-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-DETECT-008",
+    "source_entity": "T1136",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-009",
+    "target_type": "DetectionPattern",
+    "confidence": 0.75
+  },
+  {
+    "relationship_id": "REL-DETECT-009",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-ENUM-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-DETECT-010",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-S3-002",
+    "target_type": "DetectionPattern",
+    "confidence": 0.92
+  },
+  {
+    "relationship_id": "REL-DETECT-011",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-DATA-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-DETECT-012",
+    "source_entity": "T1578",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-EC2-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.88
+  },
+  {
+    "relationship_id": "REL-DETECT-013",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-DESTRUCT-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-DETECT-014",
+    "source_entity": "T1556",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-005",
+    "target_type": "DetectionPattern",
+    "confidence": 0.92
+  },
+  {
+    "relationship_id": "REL-DETECT-015",
+    "source_entity": "T1619",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-ENUM-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-DETECT-016",
+    "source_entity": "T1110",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-008",
+    "target_type": "DetectionPattern",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-DETECT-017",
+    "source_entity": "T1199",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.82
+  },
+  {
+    "relationship_id": "REL-SERVICE-001",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-002",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-003",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-004",
+    "source_entity": "T1530",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-005",
+    "source_entity": "T1136",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-006",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-SERVICE-007",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-008",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-SERVICE-009",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-SERVICE-010",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-011",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "RDS",
+    "target_type": "AWSService",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-SERVICE-012",
+    "source_entity": "T1578",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-013",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-SERVICE-014",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-015",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "RDS",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-016",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "Lambda",
+    "target_type": "AWSService",
+    "confidence": 0.75
+  },
+  {
+    "relationship_id": "REL-SERVICE-017",
+    "source_entity": "T1556",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-018",
+    "source_entity": "T1619",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 1.0
+  },
+  {
+    "relationship_id": "REL-SERVICE-019",
+    "source_entity": "T1528",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-SERVICE-020",
+    "source_entity": "T1528",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "Lambda",
+    "target_type": "AWSService",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-SERVICE-021",
+    "source_entity": "T1528",
+    "source_type": "MITRETechnique",
+    "relationship": "AFFECTS",
+    "target_entity": "EKS",
+    "target_type": "AWSService",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-001",
+    "source_entity": "IOC-IAM-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-002",
+    "source_entity": "IOC-IAM-002",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-002",
+    "target_type": "Playbook",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-003",
+    "source_entity": "IOC-IAM-003",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-002",
+    "target_type": "Playbook",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-004",
+    "source_entity": "IOC-IAM-004",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.92
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-005",
+    "source_entity": "IOC-IAM-005",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-003",
+    "target_type": "Playbook",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-006",
+    "source_entity": "IOC-IAM-006",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.88
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-007",
+    "source_entity": "IOC-IAM-007",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-004",
+    "target_type": "Playbook",
+    "confidence": 0.98
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-008",
+    "source_entity": "IOC-IAM-008",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-009",
+    "source_entity": "IOC-IAM-009",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-002",
+    "target_type": "Playbook",
+    "confidence": 0.80
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-010",
+    "source_entity": "IOC-S3-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-S3-001",
+    "target_type": "Playbook",
+    "confidence": 0.92
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-011",
+    "source_entity": "IOC-S3-002",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-S3-002",
+    "target_type": "Playbook",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-012",
+    "source_entity": "IOC-EC2-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-EC2-001",
+    "target_type": "Playbook",
+    "confidence": 0.90
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-013",
+    "source_entity": "IOC-ENUM-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-ENUM-001",
+    "target_type": "Playbook",
+    "confidence": 0.85
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-014",
+    "source_entity": "IOC-DATA-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-DATA-001",
+    "target_type": "Playbook",
+    "confidence": 0.92
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-015",
+    "source_entity": "IOC-DESTRUCT-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-DESTRUCT-001",
+    "target_type": "Playbook",
+    "confidence": 0.95
+  },
+  {
+    "relationship_id": "REL-PLAYBOOK-016",
+    "source_entity": "IOC-LAMBDA-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-LAMBDA-001",
+    "target_type": "Playbook",
+    "confidence": 0.88
+  },
+  {
+    "relationship_id": "REL-CHAIN-001",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1098",
+    "target_type": "MITRETechnique",
+    "confidence": 0.90,
+    "description": "Valid account access often leads to account manipulation for persistence"
+  },
+  {
+    "relationship_id": "REL-CHAIN-002",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1530",
+    "target_type": "MITRETechnique",
+    "confidence": 0.85,
+    "description": "Compromised credentials are commonly used to access cloud storage data"
+  },
+  {
+    "relationship_id": "REL-CHAIN-003",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1136",
+    "target_type": "MITRETechnique",
+    "confidence": 0.80,
+    "description": "Attackers with valid credentials often create additional accounts for backup access"
+  },
+  {
+    "relationship_id": "REL-CHAIN-004",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1526",
+    "target_type": "MITRETechnique",
+    "confidence": 0.95,
+    "description": "Initial access via valid accounts is followed by service discovery/enumeration"
+  },
+  {
+    "relationship_id": "REL-CHAIN-005",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1530",
+    "target_type": "MITRETechnique",
+    "confidence": 0.85,
+    "description": "Escalated privileges facilitate access to sensitive data in cloud storage"
+  },
+  {
+    "relationship_id": "REL-CHAIN-006",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1485",
+    "target_type": "MITRETechnique",
+    "confidence": 0.70,
+    "description": "Administrative privileges gained through manipulation enable destructive actions"
+  },
+  {
+    "relationship_id": "REL-CHAIN-007",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1537",
+    "target_type": "MITRETechnique",
+    "confidence": 0.80,
+    "description": "Elevated permissions allow data to be transferred to external accounts"
+  },
+  {
+    "relationship_id": "REL-CHAIN-008",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1530",
+    "target_type": "MITRETechnique",
+    "confidence": 0.88,
+    "description": "Service discovery identifies storage locations for subsequent data theft"
+  },
+  {
+    "relationship_id": "REL-CHAIN-009",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1537",
+    "target_type": "MITRETechnique",
+    "confidence": 0.75,
+    "description": "Reconnaissance identifies resources for exfiltration to external accounts"
+  },
+  {
+    "relationship_id": "REL-CHAIN-010",
+    "source_entity": "T1530",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1537",
+    "target_type": "MITRETechnique",
+    "confidence": 0.85,
+    "description": "Data collection from cloud storage often precedes transfer to attacker accounts"
+  },
+  {
+    "relationship_id": "REL-CHAIN-011",
+    "source_entity": "T1136",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1098",
+    "target_type": "MITRETechnique",
+    "confidence": 0.90,
+    "description": "Newly created accounts are often granted escalated privileges"
+  },
+  {
+    "relationship_id": "REL-CHAIN-012",
+    "source_entity": "T1556",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1078",
+    "target_type": "MITRETechnique",
+    "confidence": 0.88,
+    "description": "Weakening authentication (removing MFA) facilitates continued valid account usage"
+  },
+  {
+    "relationship_id": "REL-CHAIN-013",
+    "source_entity": "T1619",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1530",
+    "target_type": "MITRETechnique",
+    "confidence": 0.92,
+    "description": "Storage object discovery directly leads to data collection"
+  },
+  {
+    "relationship_id": "REL-CHAIN-014",
+    "source_entity": "T1110",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1078",
+    "target_type": "MITRETechnique",
+    "confidence": 0.95,
+    "description": "Successful brute force attacks result in valid account compromise"
+  },
+  {
+    "relationship_id": "REL-CHAIN-015",
+    "source_entity": "T1199",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1078",
+    "target_type": "MITRETechnique",
+    "confidence": 0.85,
+    "description": "Exploiting trusted relationships provides valid account access"
+  },
+  {
+    "relationship_id": "REL-CHAIN-016",
+    "source_entity": "T1199",
+    "source_type": "MITRETechnique",
+    "relationship": "ENABLES",
+    "target_entity": "T1098",
+    "target_type": "MITRETechnique",
+    "confidence": 0.75,
+    "description": "Cross-account access can be abused to manipulate IAM configurations"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-001",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Valid accounts technique requires IAM service for authentication and authorization"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-002",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Account manipulation directly modifies IAM entities"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-003",
+    "source_entity": "T1136",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Creating accounts requires IAM service to create users or roles"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-004",
+    "source_entity": "T1556",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Modifying authentication mechanisms targets IAM MFA configurations"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-005",
+    "source_entity": "T1530",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Data from cloud storage primarily targets S3 buckets"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-006",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.7,
+    "description": "Transfer data to cloud account may use S3 for exfiltration"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-007",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.8,
+    "description": "Transfer data via snapshots requires EC2 for EBS snapshots and AMIs"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-008",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "RDS",
+    "target_type": "AWSService",
+    "confidence": 0.7,
+    "description": "Transfer data via database snapshots uses RDS snapshot sharing"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-009",
+    "source_entity": "T1578",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Modifying cloud compute infrastructure directly targets EC2 resources"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-010",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.8,
+    "description": "Data destruction often targets S3 object deletion"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-011",
+    "source_entity": "T1485",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.7,
+    "description": "Data destruction may include EC2 instance and volume termination"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-012",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 0.9,
+    "description": "Cloud service discovery includes IAM enumeration"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-013",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "S3",
+    "target_type": "AWSService",
+    "confidence": 0.8,
+    "description": "Cloud service discovery includes S3 bucket enumeration"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-014",
+    "source_entity": "T1526",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "EC2",
+    "target_type": "AWSService",
+    "confidence": 0.8,
+    "description": "Cloud service discovery includes EC2 instance enumeration"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-015",
+    "source_entity": "T1087",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Account discovery in cloud environments focuses on IAM enumeration"
+  },
+  {
+    "relationship_id": "REL-REQUIRES-016",
+    "source_entity": "T1110",
+    "source_type": "MITRETechnique",
+    "relationship": "REQUIRES",
+    "target_entity": "IAM",
+    "target_type": "AWSService",
+    "confidence": 1.0,
+    "description": "Brute force attacks target IAM console login authentication"
+  },
+  {
+    "relationship_id": "REL-SUPPL-001",
+    "source_entity": "IR-IAM-002",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.9,
+    "description": "Privilege escalation response supplements credential compromise handling"
+  },
+  {
+    "relationship_id": "REL-SUPPL-002",
+    "source_entity": "IR-IAM-003",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.85,
+    "description": "MFA deactivation response builds on credential compromise procedures"
+  },
+  {
+    "relationship_id": "REL-SUPPL-003",
+    "source_entity": "IR-S3-002",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-S3-001",
+    "target_type": "Playbook",
+    "confidence": 0.95,
+    "description": "Bucket policy tampering response supplements data exfiltration investigation"
+  },
+  {
+    "relationship_id": "REL-SUPPL-004",
+    "source_entity": "IR-DATA-001",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-S3-001",
+    "target_type": "Playbook",
+    "confidence": 0.8,
+    "description": "Snapshot sharing response relates to S3 data exfiltration techniques"
+  },
+  {
+    "relationship_id": "REL-SUPPL-005",
+    "source_entity": "IR-ENUM-001",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-IAM-004",
+    "target_type": "Playbook",
+    "confidence": 0.9,
+    "description": "Service enumeration response complements impossible travel investigation"
+  },
+  {
+    "relationship_id": "REL-SUPPL-006",
+    "source_entity": "IR-LAMBDA-001",
+    "source_type": "Playbook",
+    "relationship": "SUPPLEMENTS",
+    "target_entity": "IR-IAM-002",
+    "target_type": "Playbook",
+    "confidence": 0.85,
+    "description": "Lambda backdoor response supplements privilege escalation procedures"
+  },
+  {
+    "relationship_id": "REL-DETECT-017",
+    "source_entity": "T1537",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-S3-003",
+    "target_type": "DetectionPattern",
+    "confidence": 0.85,
+    "description": "Gradual S3 data exfiltration detected by trending slope analysis"
+  },
+  {
+    "relationship_id": "REL-DETECT-018",
+    "source_entity": "T1087",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-010",
+    "target_type": "DetectionPattern",
+    "confidence": 0.90,
+    "description": "IAM enumeration by non-admin detected via List operation volume"
+  },
+  {
+    "relationship_id": "REL-DETECT-019",
+    "source_entity": "T1098",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-011",
+    "target_type": "DetectionPattern",
+    "confidence": 0.88,
+    "description": "Off-hours IAM modifications detected by after_hours_ratio feature"
+  },
+  {
+    "relationship_id": "REL-DETECT-020",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-IAM-012",
+    "target_type": "DetectionPattern",
+    "confidence": 0.75,
+    "description": "High error rate indicates permission enumeration after credential compromise"
+  },
+  {
+    "relationship_id": "REL-DETECT-021",
+    "source_entity": "T1078",
+    "source_type": "MITRETechnique",
+    "relationship": "DETECTED_BY",
+    "target_entity": "IOC-BEHAV-001",
+    "target_type": "DetectionPattern",
+    "confidence": 0.80,
+    "description": "User-service mismatch indicates compromised credential lateral movement"
+  },
+  {
+    "relationship_id": "REL-TRIGGER-017",
+    "source_entity": "IOC-S3-003",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-S3-001",
+    "target_type": "Playbook",
+    "confidence": 0.90,
+    "description": "Gradual data exfiltration triggers S3 data access investigation playbook"
+  },
+  {
+    "relationship_id": "REL-TRIGGER-018",
+    "source_entity": "IOC-IAM-010",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-004",
+    "target_type": "Playbook",
+    "confidence": 0.85,
+    "description": "IAM enumeration triggers credential compromise investigation"
+  },
+  {
+    "relationship_id": "REL-TRIGGER-019",
+    "source_entity": "IOC-IAM-011",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-002",
+    "target_type": "Playbook",
+    "confidence": 0.90,
+    "description": "Off-hours IAM modifications trigger privilege escalation response"
+  },
+  {
+    "relationship_id": "REL-TRIGGER-020",
+    "source_entity": "IOC-IAM-012",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-004",
+    "target_type": "Playbook",
+    "confidence": 0.80,
+    "description": "High error rate triggers credential compromise investigation"
+  },
+  {
+    "relationship_id": "REL-TRIGGER-021",
+    "source_entity": "IOC-BEHAV-001",
+    "source_type": "DetectionPattern",
+    "relationship": "TRIGGERS",
+    "target_entity": "IR-IAM-001",
+    "target_type": "Playbook",
+    "confidence": 0.85,
+    "description": "User-service behavioral mismatch triggers compromised credential response"
+  }
+]

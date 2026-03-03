@@ -1,0 +1,49 @@
+{
+  "generated_at": "2026-03-01T07:48:28.445891+00:00",
+  "total_attack_events": 294,
+  "attacks": {
+    "privilege_escalation": {
+      "id": 1,
+      "actor": "alice-dev",
+      "window_start": "2026-02-17T20:30:00Z",
+      "window_end": "2026-02-17T20:55:00Z",
+      "event_count": 5
+    },
+    "data_exfiltration": {
+      "id": 2,
+      "actor": "eve-analyst",
+      "window_start": "2026-02-23T03:30:00Z",
+      "window_end": "2026-02-25T12:30:00Z",
+      "event_count": 227
+    },
+    "insider_threat": {
+      "id": 3,
+      "actor": "bob-devops",
+      "window_start": "2026-02-27T11:15:00Z",
+      "window_end": "2026-02-27T11:45:00Z",
+      "event_count": 14
+    },
+    "reconnaissance": {
+      "id": 4,
+      "actor": "eve-analyst",
+      "window_start": "2026-02-18T05:30:00Z",
+      "window_end": "2026-02-20T10:30:00Z",
+      "event_count": 45
+    },
+    "backdoor_creation": {
+      "id": 5,
+      "actor": "eve-analyst",
+      "window_start": "2026-02-24T21:45:00Z",
+      "window_end": "2026-02-24T22:05:00Z",
+      "event_count": 3
+    }
+  },
+  "label_map": {
+    "0": "normal",
+    "1": "privilege_escalation",
+    "2": "data_exfiltration",
+    "3": "insider_threat",
+    "4": "reconnaissance",
+    "5": "backdoor_creation"
+  }
+}
