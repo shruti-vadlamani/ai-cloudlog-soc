@@ -1,0 +1,60 @@
+# Backend Configuration
+# ====================
+# Configuration for production pipeline and API backend
+
+# AWS S3 Configuration (for real CloudTrail ingestion)
+aws:
+  # S3 bucket containing CloudTrail logs
+  s3_bucket: "your-cloudtrail-logs-bucket"
+  
+  # S3 prefix (e.g., 'AWSLogs/123456789/CloudTrail/ap-south-1/')
+  # Leave null to use default from simulation_config.yaml
+  s3_prefix: null
+  
+  # AWS CLI profile name (or use environment variables)
+  profile: "default"
+  
+  # Region
+  region: "ap-south-1"
+
+# Pipeline Configuration
+pipeline:
+  # Auto-run pipeline on backend startup
+  run_on_startup: false
+  
+  # Default stages to run
+  default_stages:
+    - "ingest"
+    - "features"
+    - "models"
+  
+  # Default date range (days back from current date)
+  default_lookback_days: 7
+  
+  # Enable RAG ingestion after model runs
+  enable_rag: false
+  
+  # Scheduled pipeline runs (requires APScheduler)
+  # Set to null to disable scheduling
+  schedule:
+    enabled: false
+    # Cron expression: "0 */6 * * *" = every 6 hours
+    cron: "0 */6 * * *"
+
+# API Configuration
+api:
+  # CORS origins (for production, specify frontend URL)
+  cors_origins:
+    - "*"  # Allow all origins (development only)
+  
+  # Max page size for paginated endpoints
+  max_page_size: 200
+  
+  # Rate limiting (requests per minute)
+  # Set to null to disable
+  rate_limit: null
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

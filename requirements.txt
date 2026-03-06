@@ -19,6 +19,13 @@ botocore>=1.34.0
 # RAG layer (coordinate with your friend's setup)
 chromadb>=0.4.0
 neo4j>=5.14.0
+sentence-transformers>=2.2.0
+
+# FastAPI backend
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+apscheduler>=3.10.0  # Optional: for scheduled pipeline runs
 
 # Optional: faster Parquet
 fastparquet>=2023.10.1

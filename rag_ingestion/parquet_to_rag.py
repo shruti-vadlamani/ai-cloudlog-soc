@@ -188,19 +188,17 @@ def _write_batch(tx, batch: list) -> None:
     MERGE (u:User {name: ev.user_name})
     SET u.user_type = ev.user_type,
         u.arn = ev.user_arn
-    CREATE (e:Event {
-        eventID: ev.eventID,
-        eventName: ev.eventName,
-        eventSource: ev.eventSource,
-        eventTime: ev.eventTime_str,
-        isReadOnly: ev.is_read_only,
-        isError: ev.is_error,
-        errorCode: ev.error_code,
-        sourceIP: ev.sourceIPAddress,
-        isAttack: ev.is_attack,
-        attackId: ev.attack_id,
-        attackName: ev.attack_name
-    })
+    MERGE (e:Event {eventID: ev.eventID})
+    SET e.eventName = ev.eventName,
+        e.eventSource = ev.eventSource,
+        e.eventTime = ev.eventTime_str,
+        e.isReadOnly = ev.is_read_only,
+        e.isError = ev.is_error,
+        e.errorCode = ev.error_code,
+        e.sourceIP = ev.sourceIPAddress,
+        e.isAttack = ev.is_attack,
+        e.attackId = ev.attack_id,
+        e.attackName = ev.attack_name
     MERGE (u)-[:PERFORMED]->(e)
     FOREACH (bucket IN CASE WHEN ev.request_bucket_name IS NOT NULL
                             THEN [ev.request_bucket_name] ELSE [] END |

@@ -59,3 +59,13 @@ data/features/
 *.h5
 *.pkl
 *.joblib
+
+# Node.js (Frontend)
+node_modules/
+package-lock.json
+
+# Generated reports
+incident_report_*.txt
+
+# Data results
+data/results/

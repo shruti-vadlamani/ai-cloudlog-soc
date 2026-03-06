@@ -61,10 +61,11 @@ class AlertEnricher:
     8. Assemble final enriched payload
     """
 
-    def __init__(self, neo4j_driver, chroma_client, embedder):
+    def __init__(self, neo4j_driver, chroma_client, embedder, use_graph_bridges: bool = True):
         self.driver = neo4j_driver
         self.chroma = chroma_client
         self.embedder = embedder
+        self.use_graph_bridges = use_graph_bridges  # Use pre-built graph bridges for matching
         self._init_chroma_collections()
 
     def _init_chroma_collections(self):
@@ -120,9 +121,13 @@ class AlertEnricher:
         models_fired = self._models_that_fired(if_score, lof_score, ae_score)
 
         # Step 4: Match detection patterns via Neo4j
-        matched_patterns = self._match_detection_patterns(
-            feature_values, event_context.get("event_names", [])
-        )
+        # Use graph bridges if available (faster, pre-computed)
+        if self.use_graph_bridges:
+            matched_patterns = self._match_detection_patterns_via_graph(user, window)
+        else:
+            matched_patterns = self._match_detection_patterns(
+                feature_values, event_context.get("event_names", [])
+            )
 
         # Step 5: Get techniques + playbooks from graph
         graph_intel = self._get_graph_intel(matched_patterns)
@@ -347,6 +352,96 @@ class AlertEnricher:
         log.info(f"Matched {len(sorted_patterns)} detection patterns")
         return sorted_patterns[:5]  # Top 5
 
+    def _match_detection_patterns_via_graph(self, user: str, window: str) -> List[Dict]:
+        """
+        Match detection patterns using pre-built graph bridges.
+        
+        This method leverages the TRIGGERS_INDICATOR edges created by bridge_graphs.py.
+        Instead of computing matches in Python, it traverses the pre-built graph.
+        
+        Flow:
+        1. Find the Window node for this (user, window)
+        2. Traverse TRIGGERS_INDICATOR edges to matched DetectionPattern nodes
+        3. For each pattern, get techniques and playbooks
+        
+        This is much faster than _match_detection_patterns() because:
+        - No feature threshold evaluation in Python
+        - No loading all patterns and computing scores
+        - Direct graph traversal with pre-computed match_score
+        
+        Args:
+            user: User name
+            window: Window timestamp string
+            
+        Returns:
+            List of matched pattern dicts with techniques and playbooks
+        """
+        if not self.driver:
+            return []
+        
+        window_id = f"{user}_{window}"
+        
+        with self.driver.session() as s:
+            result = s.run("""
+                MATCH (u:User {name: $user})-[:HAD_WINDOW]->(w:Window {window_id: $window_id})
+                MATCH (w)-[ti:TRIGGERS_INDICATOR]->(d:DetectionPattern)
+                OPTIONAL MATCH (t:MITRETechnique)-[:DETECTED_BY]->(d)
+                OPTIONAL MATCH (d)-[:TRIGGERS]->(p:Playbook)
+                RETURN 
+                    d.id as pattern_id,
+                    d.name as pattern_name,
+                    d.severity as severity,
+                    d.description as description,
+                    d.false_positive_sources as fp,
+                    ti.match_score as match_score,
+                    ti.matched_features as matched_features,
+                    d.techniques_detected as techniques,
+                    collect(DISTINCT t.technique_id) as technique_ids_from_graph,
+                    collect(DISTINCT {
+                        id: p.id, 
+                        name: p.name, 
+                        triage: p.triage_questions, 
+                        containment: p.containment_steps,
+                        incident_types: p.incident_types
+                    }) as playbooks
+                ORDER BY ti.match_score DESC
+            """, user=user, window_id=window_id)
+            
+            patterns = []
+            for rec in result:
+                # Parse containment steps (stored as JSON string)
+                playbooks = []
+                for pb in rec["playbooks"]:
+                    if pb.get("id"):
+                        try:
+                            containment = json.loads(pb.get("containment") or "[]")
+                        except (json.JSONDecodeError, TypeError):
+                            containment = []
+                        playbooks.append({
+                            "playbook_id": pb["id"],
+                            "name": pb["name"] or "",
+                            "incident_types": pb.get("incident_types") or [],
+                            "triage_questions": pb.get("triage") or [],
+                            "containment_steps": containment[:3],  # Top 3 for LLM context
+                        })
+                
+                patterns.append({
+                    "pattern_id": rec["pattern_id"],
+                    "name": rec["pattern_name"] or "",
+                    "severity": rec["severity"] or "",
+                    "description": rec["description"] or "",
+                    "techniques": rec["techniques"] or [],
+                    "triggers_playbook": rec["techniques"] or [],  # For backward compatibility
+                    "false_positive_sources": rec["fp"] or [],
+                    "match_reason": "graph_bridge_triggers_indicator",
+                    "match_score": round(rec["match_score"], 3),
+                    "matched_features": rec["matched_features"] or [],
+                    "playbooks": playbooks,  # Include playbooks directly in pattern
+                })
+            
+            log.info(f"Matched {len(patterns)} detection patterns via graph bridges")
+            return patterns[:5]  # Top 5
+
     def _score_behavioral_match(self, feature_values: Dict, bi: Dict) -> float:
         """
         Score how well a window's feature values match a pattern's
@@ -481,11 +576,20 @@ class AlertEnricher:
     def _search_similar_incidents(
         self, user: str, feature_values: Dict, attack_hint: str = ""
     ) -> List[Dict]:
-        """Search behavioral_incidents for similar past windows."""
+        """
+        Search behavioral_incidents using multi-query retrieval strategy.
+        
+        Generates three different semantic views of the alert to improve recall:
+        - Query A: Behavioral summary (feature values)
+        - Query B: Anomaly description (event patterns)
+        - Query C: Attack style (attack characteristics)
+        
+        Combines results from all queries, keeping highest similarity for each incident.
+        """
         if not self.incidents_col or not self.embedder:
             return []
 
-        # Build a behavioral query string from feature values
+        # Extract feature values
         iam_writes = int(feature_values.get("iam_write_events", 0))
         iam_lists = int(feature_values.get("iam_list_events", 0))
         s3_gets = int(feature_values.get("s3_get_events", 0))
@@ -494,41 +598,91 @@ class AlertEnricher:
         total_z = float(feature_values.get("total_events_zscore", 0))
         slope = float(feature_values.get("s3_get_slope_3d", 0))
 
-        query = (
-            f"User {user} anomalous behavior: "
-            f"iam_writes={iam_writes} iam_lists={iam_lists} "
-            f"s3_gets={s3_gets} s3_deletes={s3_dels} "
-            f"after_hours={after_hrs:.2f} volume_zscore={total_z:.1f} "
-            f"s3_slope={slope:.2f}"
+        # ── Generate three semantic views of the alert ────────────────────────
+        
+        # Query A: Behavioral summary (feature counts and ratios)
+        query_a = (
+            f"User {user} anomaly: iam writes {iam_writes}, iam list {iam_lists}, "
+            f"s3 reads {s3_gets}, s3 deletes {s3_dels}, after hours activity {after_hrs:.2f}"
         )
-        if attack_hint and attack_hint != "normal":
-            query += f" {attack_hint}"
+        
+        # Query B: Anomaly description (detection-focused)
+        query_b = (
+            f"AWS CloudTrail anomaly detection: abnormal IAM activity and S3 access. "
+            f"event volume zscore {total_z:.1f}, suspicious user behavior, {attack_hint}"
+        )
+        
+        # Query C: Attack style query (attack characteristics)
+        query_c = (
+            f"possible cloud security attack involving IAM privilege escalation, "
+            f"s3 data access anomaly, unusual API activity by user {user}, "
+            f"s3 exfiltration pattern slope {slope:.2f}"
+        )
+        
+        queries = [query_a, query_b, query_c]
+        log.debug(f"Multi-query retrieval: {queries}")
 
         try:
-            embedding = self.embedder.encode(query).tolist()
-            results = self.incidents_col.query(
-                query_embeddings=[embedding],
-                n_results=3,
-                include=["documents", "metadatas", "distances"]
-            )
-
-            similar = []
-            if results and results["documents"]:
-                for doc, meta, dist in zip(
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    results["distances"][0]
-                ):
-                    similar.append({
-                        "summary": doc,
-                        "attack_name": meta.get("attack_name", "unknown"),
-                        "user": meta.get("user_name", "unknown"),
-                        "similarity": round(1 - dist, 3),
-                    })
+            # ── Embed all three queries ────────────────────────────────────────
+            embeddings = self.embedder.encode(queries)
+            
+            # ── Run ChromaDB search for each query ──────────────────────────────
+            combined_results = {}  # {doc_id: {doc, meta, best_similarity}}
+            
+            for idx, embedding in enumerate(embeddings):
+                log.debug(f"Query {idx + 1}/3 searching ChromaDB...")
+                
+                results = self.incidents_col.query(
+                    query_embeddings=[embedding.tolist()],
+                    n_results=4,  # Get more per query to improve recall
+                    include=["documents", "metadatas", "distances"]
+                )
+                
+                # ── Combine results, keeping highest similarity ──────────────────
+                if results and results["documents"]:
+                    for doc, meta, dist in zip(
+                        results["documents"][0],
+                        results["metadatas"][0],
+                        results["distances"][0]
+                    ):
+                        similarity = round(1 - dist, 3)  # Convert distance to similarity
+                        doc_id = f"{meta.get('user_name', 'unknown')}_{doc[:50]}"
+                        
+                        # Keep highest similarity score for this document
+                        if (
+                            doc_id not in combined_results 
+                            or similarity > combined_results[doc_id]["similarity"]
+                        ):
+                            combined_results[doc_id] = {
+                                "doc": doc,
+                                "meta": meta,
+                                "similarity": similarity,
+                            }
+            
+            # ── Sort by similarity and return top 3 ─────────────────────────────
+            sorted_results = sorted(
+                combined_results.values(),
+                key=lambda x: x["similarity"],
+                reverse=True
+            )[:3]
+            
+            similar = [
+                {
+                    "summary": result["doc"],
+                    "attack_name": result["meta"].get("attack_name", "unknown"),
+                    "user": result["meta"].get("user_name", "unknown"),
+                    "similarity": result["similarity"],
+                }
+                for result in sorted_results
+            ]
+            
+            log.debug(f"Found {len(similar)} similar incidents (multi-query)")
             return similar
+            
         except Exception as e:
-            log.debug(f"Incident search failed: {e}")
+            log.debug(f"Multi-query incident search failed: {e}")
             return []
+
 
     def _search_threat_intel(
         self, matched_patterns: List[Dict], technique_ids: List[str]

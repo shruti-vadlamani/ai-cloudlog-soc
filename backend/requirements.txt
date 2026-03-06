@@ -1,0 +1,18 @@
+# Backend-specific dependencies
+# These are already included in the main requirements.txt
+# This file is for reference only
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# Data handling (from main requirements)
+pandas>=2.1.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# RAG components (from main requirements)
+chromadb>=0.4.0
+neo4j>=5.14.0
+sentence-transformers>=2.2.0

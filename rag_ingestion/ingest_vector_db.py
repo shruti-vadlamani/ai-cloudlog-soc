@@ -107,11 +107,36 @@ def ingest_behavioral_incidents(client: chromadb.ClientAPI, embedder: SentenceTr
         attack_name = str(row.get("attack_name", "unknown"))
         attack_id = int(row.get("attack_id", 0))
 
+        # Extract anomaly signal features for enriched document
+        total_z = float(row.get("total_events_zscore", 0))
+        s3_slope = float(row.get("s3_get_slope_3d", 0))
+        after_hrs = float(row.get("after_hours_ratio", 0))
+        iam_writes = int(row.get("iam_write_events", 0))
+        iam_lists = int(row.get("iam_list_events", 0))
+        s3_gets = int(row.get("s3_get_events", 0))
+        s3_dels = int(row.get("s3_delete_events", 0))
+
+        # Append "Anomaly Signals" section to enhance document
+        enriched_text = (
+            f"{text}\n\nAnomaly Signals:\n"
+            f"* total_events_zscore = {total_z:.2f}\n"
+            f"* s3_get_slope_3d = {s3_slope:.2f}\n"
+            f"* after_hours_ratio = {after_hrs:.2f}\n"
+            f"* iam_write_events = {iam_writes}\n"
+            f"* iam_list_events = {iam_lists}\n"
+            f"* s3_get_events = {s3_gets}\n"
+            f"* s3_delete_events = {s3_dels}\n"
+            f"Attack label: {attack_name}"
+        )
+
+        # Normalize text before embedding (lowercase + strip)
+        normalized_text = enriched_text.lower().strip()
+
         doc_id = f"inc_{user}_{window}".replace(" ", "_").replace(":", "-")[:128]
 
-        documents.append(text)
+        documents.append(normalized_text)
         ids.append(doc_id)
-        embeddings.append(embedder.encode(text).tolist())
+        embeddings.append(embedder.encode(normalized_text).tolist())
         metadatas.append({
             "user_name": user,
             "window": window,
@@ -126,6 +151,7 @@ def ingest_behavioral_incidents(client: chromadb.ClientAPI, embedder: SentenceTr
             "total_events_zscore": float(row.get("total_events_zscore", 0)),
             "s3_get_slope_3d": float(row.get("s3_get_slope_3d", 0)),
             "after_hours_ratio": float(row.get("after_hours_ratio", 0)),
+            "document_type": "incident",
         })
 
     # Batch upsert
@@ -189,15 +215,19 @@ def ingest_knowledge_base(client: chromadb.ClientAPI, embedder: SentenceTransfor
                 f"Enables: {enables}."
             )
 
+            # Normalize text before embedding
+            normalized_text = text.lower().strip()
+
             doc_id = f"mitre_{tech_id}_{doc_counter}"
-            documents.append(text)
+            documents.append(normalized_text)
             ids.append(doc_id)
-            embeddings.append(embedder.encode(text).tolist())
+            embeddings.append(embedder.encode(normalized_text).tolist())
             metadatas.append({
                 "source": "mitre_techniques.json",
                 "type": "technique",
                 "technique_id": tech_id,
                 "name": name,
+                "document_type": "knowledge",
             })
             doc_counter += 1
 
@@ -232,22 +262,26 @@ def ingest_knowledge_base(client: chromadb.ClientAPI, embedder: SentenceTransfor
             user_ctx = det.get("user_context", {})
             persona_note = user_ctx.get("persona_note", "")
 
+            # Improved document structure with clear sections
             text = (
-                f"Detection Pattern {pattern_id}: {name}. "
-                f"Severity: {severity}. "
-                f"{text_body} "
-                f"Techniques: {techniques}. "
-                f"Triggers: {triggers}. "
-                f"Feature signals: {bi_text}. "
-                f"{persona_note}"
+                f"Detection Pattern: {name}\n\n"
+                f"Severity: {severity}\n\n"
+                f"Description:\n{text_body}\n\n"
+                f"Behavioral Indicators:\n{bi_text}\n\n"
+                f"MITRE Techniques:\n{techniques}\n\n"
+                f"Playbooks Triggered:\n{triggers}\n\n"
+                f"User Context: {persona_note}"
             ).strip()
+
+            # Normalize text before embedding
+            normalized_text = text.lower().strip()
 
             event_names = det.get("cloudtrail_event_patterns", {}).get("eventName", [])
 
             doc_id = f"dp_{pattern_id}_{doc_counter}"
-            documents.append(text)
+            documents.append(normalized_text)
             ids.append(doc_id)
-            embeddings.append(embedder.encode(text).tolist())
+            embeddings.append(embedder.encode(normalized_text).tolist())
             metadatas.append({
                 "source": "detection_patterns.json",
                 "type": "detection_pattern",
@@ -255,6 +289,7 @@ def ingest_knowledge_base(client: chromadb.ClientAPI, embedder: SentenceTransfor
                 "name": name,
                 "severity": severity,
                 "cloudtrail_events": json.dumps(event_names),
+                "document_type": "knowledge",
             })
             doc_counter += 1
 
@@ -284,23 +319,28 @@ def ingest_knowledge_base(client: chromadb.ClientAPI, embedder: SentenceTransfor
             ])
 
             text = (
-                f"Playbook {pb_id}: {name}. "
-                f"Incident types: {incident_types}. "
-                f"Techniques: {techniques}. "
-                f"Triage: {triage_qs} "
-                f"Investigation: {investigate_steps}. "
-                f"{contain_count} containment actions available."
+                f"Playbook: {name}\n\n"
+                f"Playbook ID: {pb_id}\n\n"
+                f"Incident Types: {incident_types}\n\n"
+                f"MITRE Techniques Addressed: {techniques}\n\n"
+                f"Triage Questions: {triage_qs}\n\n"
+                f"Investigation Steps: {investigate_steps}\n\n"
+                f"Containment Actions: {contain_count} available."
             )
 
+            # Normalize text before embedding
+            normalized_text = text.lower().strip()
+
             doc_id = f"pb_{pb_id}_{doc_counter}"
-            documents.append(text)
+            documents.append(normalized_text)
             ids.append(doc_id)
-            embeddings.append(embedder.encode(text).tolist())
+            embeddings.append(embedder.encode(normalized_text).tolist())
             metadatas.append({
                 "source": "playbooks.json",
                 "type": "playbook",
                 "playbook_id": pb_id,
                 "name": name,
+                "document_type": "knowledge",
             })
             doc_counter += 1
 
@@ -324,22 +364,28 @@ def ingest_knowledge_base(client: chromadb.ClientAPI, embedder: SentenceTransfor
             detection_focus = " ".join(svc.get("detection_focus", [])[:3])
 
             text = (
-                f"AWS Service {svc_name} (sensitivity: {sensitivity}): {description} "
-                f"Sensitive operations: {sensitive_ops}. "
-                f"Detection focus: {detection_focus}. "
-                f"Related techniques: {techniques}."
+                f"AWS Service: {svc_name}\n\n"
+                f"Security Sensitivity: {sensitivity}\n\n"
+                f"Description:\n{description}\n\n"
+                f"Sensitive Operations:\n{sensitive_ops}\n\n"
+                f"Detection Focus:\n{detection_focus}\n\n"
+                f"Related MITRE Techniques:\n{techniques}"
             )
 
+            # Normalize text before embedding
+            normalized_text = text.lower().strip()
+
             doc_id = f"svc_{svc_name}_{doc_counter}"
-            documents.append(text)
+            documents.append(normalized_text)
             ids.append(doc_id)
-            embeddings.append(embedder.encode(text).tolist())
+            embeddings.append(embedder.encode(normalized_text).tolist())
             metadatas.append({
                 "source": "aws_services.json",
                 "type": "aws_service",
                 "service_name": svc_name,
                 "service_id": svc.get("service_id", svc_name),
                 "security_sensitivity": sensitivity,
+                "document_type": "knowledge",
             })
             doc_counter += 1
 
