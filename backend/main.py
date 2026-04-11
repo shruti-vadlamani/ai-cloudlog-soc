@@ -133,12 +133,24 @@ app = FastAPI(
 )
 
 # CORS - allow frontend access
-cors_origins = backend_config.get("api", {}).get("cors_origins", ["*"])
+environment = os.getenv("ENVIRONMENT", "development")
+
+if environment == "production":
+    # Production: only allow frontend URL
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    cors_origins = [frontend_url]
+    allow_credentials = True
+else:
+    # Development: allow all origins
+    cors_origins = backend_config.get("api", {}).get("cors_origins", ["*"])
+    allow_credentials = False
+
+# Override with environment variable if set
 cors_env = os.getenv("CORS_ORIGINS")
 if cors_env:
     cors_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
 
-allow_credentials = "*" not in cors_origins
+log.info(f"CORS enabled for: {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,

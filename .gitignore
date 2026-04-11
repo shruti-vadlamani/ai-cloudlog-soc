@@ -36,18 +36,74 @@ wheels/
 *.sqlite3
 *.db
 
-# ChromaDB
-!chroma_db/
-!chroma_db/**
-!chroma_db/*.sqlite3
+# Node modules (Frontend)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+/frontend/build/
 
-# Environment variables
+# Environment variables (IMPORTANT: NEVER commit secrets!)
 .env
 .env.local
+.env.production.local
+.env.test.local
+.env.development.local
+.env.*.local
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Logs
+logs/
+*.log
+lerna-debug.log*
+
+# Data files (too large or sensitive)
+data/raw/*.gz
+data/raw/*.json
+data/*.parquet
+data/features/*.parquet
+data/labels/*.csv
+data/labels/*.jsonl
+data/models/*.csv
+data/results/
+*.pickle
+*.pkl
+
+# ChromaDB (keep structure, ignore data files)
+chroma_db/*.sqlite3-shm
+chroma_db/*.sqlite3-wal
+chroma_db/*/*.parquet
+chroma_db/*/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# IDE
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Deployment related
+.vercel
+.render
+dist/
+build-cache/
+
 
 # Logs
 *.log
