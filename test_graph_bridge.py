@@ -12,10 +12,10 @@ Usage:
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
+from rag_ingestion.neo4j_env import get_neo4j_config
 sys.path.insert(0, str(Path(__file__).parent))
 
 logging.basicConfig(
@@ -69,14 +69,17 @@ def test_graph_queries():
     
     from neo4j import GraphDatabase
     
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    user = os.getenv("NEO4J_USER", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    cfg = get_neo4j_config(require_credentials=True)
+    uri = cfg["uri"]
+    user = cfg["username"]
+    password = cfg["password"]
+    database = cfg.get("database")
     
     driver = GraphDatabase.driver(uri, auth=(user, password))
     
     try:
-        with driver.session() as s:
+        session_kwargs = {"database": database} if database else {}
+        with driver.session(**session_kwargs) as s:
             # Query 1: Find anomalous windows with patterns
             log.info("\nQuery 1: Anomalous windows with matched patterns")
             result = s.run("""
@@ -170,9 +173,11 @@ def test_alert_enrichment():
         return True
     
     # Setup connections
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    user = os.getenv("NEO4J_USER", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    cfg = get_neo4j_config(require_credentials=True)
+    uri = cfg["uri"]
+    user = cfg["username"]
+    password = cfg["password"]
+    database = cfg.get("database")
     
     driver = GraphDatabase.driver(uri, auth=(user, password))
     client = chromadb.PersistentClient(path=str(PROJECT_ROOT / "chroma_db"))

@@ -6,14 +6,16 @@ Usage:
     python verify_graph_status.py
 """
 
-import os
 from neo4j import GraphDatabase
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 
 def main():
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    user = os.getenv("NEO4J_USER", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    cfg = get_neo4j_config(require_credentials=True)
+    uri = cfg["uri"]
+    user = cfg["username"]
+    password = cfg["password"]
+    database = cfg.get("database")
     
     print("=" * 70)
     print("GRAPH BRIDGE STATUS CHECK")
@@ -21,9 +23,10 @@ def main():
     print(f"Connecting to Neo4j at {uri}...")
     
     driver = GraphDatabase.driver(uri, auth=(user, password))
+    session_kwargs = {"database": database} if database else {}
     
     try:
-        with driver.session() as s:
+        with driver.session(**session_kwargs) as s:
             # Check if bridges exist
             print("\n📊 Node Counts:")
             window_count = s.run("MATCH (w:Window) RETURN count(w) as cnt").single()["cnt"]
@@ -62,7 +65,11 @@ def main():
             else:
                 print("  ✅ Bridges active and functional")
                 if window_count > 0:
-                    coverage = (triggers_indicator / window_count) * 100 if window_count > 0 else 0
+                    windows_with_patterns = s.run("""
+                        MATCH (w:Window)-[:TRIGGERS_INDICATOR]->()
+                        RETURN count(DISTINCT w) as cnt
+                    """).single()["cnt"]
+                    coverage = (windows_with_patterns / window_count) * 100 if window_count > 0 else 0
                     print(f"  📈 Pattern coverage: {coverage:.1f}% of windows matched")
             
             # Check alert enrichment readiness
@@ -132,7 +139,7 @@ def main():
         print("\nTroubleshooting:")
         print("  1. Check Neo4j is running: docker ps OR neo4j status")
         print("  2. Verify connection details in environment variables")
-        print("  3. Try: NEO4J_URI=bolt://localhost:7687 python verify_graph_status.py")
+        print("  3. Verify .env has neo4j_uri, neo4j_username, neo4j_password")
         return 1
     finally:
         driver.close()

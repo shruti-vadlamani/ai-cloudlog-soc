@@ -1,315 +1,214 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Scatter,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { apiUrl } from '../api';
 
 function PipelineView() {
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState(null);
+  const [status, setStatus] = useState({ is_running: false, current_run: null });
   const [history, setHistory] = useState([]);
   const [dataStatus, setDataStatus] = useState(null);
-  const [runConfig, setRunConfig] = useState({
-    run_all_stages: true,
-    run_models: true,
-    update_rag: true
-  });
+  const [alerts, setAlerts] = useState([]);
+  const [running, setRunning] = useState(false);
+
+  const fetchAll = async () => {
+    try {
+      const [statusRes, historyRes, dataRes, alertsRes] = await Promise.all([
+        fetch(apiUrl('/api/pipeline/status')),
+        fetch(apiUrl('/api/pipeline/history?limit=15')),
+        fetch(apiUrl('/api/pipeline/data-status')),
+        fetch(apiUrl('/api/alerts?page=1&page_size=200&sort_by=window&sort_order=asc')),
+      ]);
+
+      if (statusRes.ok) {
+        const payload = await statusRes.json();
+        setStatus(payload);
+        setRunning(Boolean(payload?.is_running));
+      }
+      if (historyRes.ok) {
+        const payload = await historyRes.json();
+        setHistory(payload?.runs || []);
+      }
+      if (dataRes.ok) {
+        const payload = await dataRes.json();
+        setDataStatus(payload?.files || {});
+      }
+      if (alertsRes.ok) {
+        const payload = await alertsRes.json();
+        setAlerts(payload?.alerts || []);
+      } else {
+        setAlerts([]);
+      }
+    } catch (err) {
+      console.error('Failed to refresh pipeline data', err);
+    }
+  };
 
   useEffect(() => {
-    fetchPipelineStatus();
-    fetchPipelineHistory();
-    fetchDataStatus();
+    fetchAll();
   }, []);
 
-  const fetchPipelineStatus = async () => {
-    try {
-      const response = await fetch('/api/pipeline/status');
-      if (response.ok) {
-        const data = await response.json();
-        setStatus(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch pipeline status:', err);
-    }
-  };
+  useEffect(() => {
+    if (!running) return undefined;
+    const id = setInterval(fetchAll, 2500);
+    return () => clearInterval(id);
+  }, [running]);
 
-  const fetchPipelineHistory = async () => {
+  const onRunPipeline = async () => {
+    setRunning(true);
     try {
-      const response = await fetch('/api/pipeline/history');
-      if (response.ok) {
-        const data = await response.json();
-        setHistory(data.runs || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch pipeline history:', err);
-    }
-  };
-
-  const fetchDataStatus = async () => {
-    try {
-      const response = await fetch('/api/pipeline/data-status');
-      if (response.ok) {
-        const data = await response.json();
-        setDataStatus(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch data status:', err);
-    }
-  };
-
-  const handleRunPipeline = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch('/api/pipeline/run', {
+      const res = await fetch(apiUrl('/api/pipeline/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(runConfig)
+        body: JSON.stringify({ run_async: true, stages: ['ingest', 'features', 'models'] }),
       });
-
-      if (!response.ok) throw new Error('Failed to start pipeline');
-
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        await fetchPipelineStatus();
-        await fetchPipelineHistory();
-        
-        const statusResponse = await fetch('/api/pipeline/status');
-        if (statusResponse.ok) {
-          const data = await statusResponse.json();
-          if (data.status !== 'running') {
-            clearInterval(pollInterval);
-            setLoading(false);
-            await fetchDataStatus();
-          }
-        }
-      }, 2000);
-
-      // Clear interval after 5 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setLoading(false);
-      }, 300000);
-
-    } catch (err) {
-      console.error('Pipeline error:', err);
-      setLoading(false);
+      if (!res.ok) throw new Error('Could not trigger pipeline');
+      fetchAll();
+    } catch (e) {
+      console.error(e);
+      setRunning(false);
+      alert('Could not trigger pipeline. Check backend logs and AWS bucket settings.');
     }
   };
 
-  const getStatusBadge = (pipelineStatus) => {
-    switch(pipelineStatus) {
-      case 'running':
-        return <span className="badge" style={{ background: '#3b82f6' }}>RUNNING</span>;
-      case 'success':
-        return <span className="badge badge-success">SUCCESS</span>;
-      case 'failed':
-        return <span className="badge badge-high">FAILED</span>;
-      case 'idle':
-      default:
-        return <span className="badge badge-low">IDLE</span>;
-    }
-  };
+  const datasetStats = useMemo(() => {
+    const normalized = dataStatus?.normalized_events?.row_count || 0;
+    const windows = dataStatus?.feature_matrix?.row_count || 0;
+    const alertsCount = dataStatus?.ensemble_alerts?.row_count || 0;
+    const attackRows = alerts.filter((a) => a.is_attack).length;
+    const attackRate = alerts.length ? (attackRows / alerts.length) * 100 : 0;
 
-  const formatBytes = (bytes) => {
-    if (!bytes) return 'N/A';
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(2)} MB`;
-  };
+    return {
+      totalEvents: normalized,
+      windows,
+      attackRate,
+      alertsCount,
+    };
+  }, [dataStatus, alerts]);
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleString();
-  };
+  const timelineData = useMemo(() => {
+    const recent = [...alerts]
+      .sort((a, b) => new Date(a.window) - new Date(b.window))
+      .slice(-280);
+
+    return recent.map((a) => ({
+      window: new Date(a.window).toISOString().slice(5, 16).replace('T', ' '),
+      score: Number(a.ensemble_score || 0),
+      attackScore: a.is_attack ? Number(a.ensemble_score || 0) : null,
+    }));
+  }, [alerts]);
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '1.875rem', fontWeight: 700 }}>
-          ⚙️ Pipeline Management
-        </h2>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button 
-            className="btn btn-secondary btn-small"
-            onClick={() => {
-              fetchPipelineStatus();
-              fetchPipelineHistory();
-              fetchDataStatus();
-            }}
-          >
-            🔄 Refresh
-          </button>
-          <button 
-            className="btn btn-primary"
-            onClick={handleRunPipeline}
-            disabled={loading || status?.status === 'running'}
-          >
-            {loading || status?.status === 'running' ? '⏳ Running...' : '▶️ Run Pipeline'}
-          </button>
+    <div className="page-stack">
+      <section className="page-intro">
+        <h2>Live Pipeline Status</h2>
+        <p>
+          Track ingestion health, dataset readiness, and anomaly behavior over the last 14 days.
+        </p>
+      </section>
+
+      <div className="action-row">
+        <button className="btn btn-primary" onClick={onRunPipeline} disabled={running}>
+          {running ? 'Running Pipeline...' : 'Run Pipeline'}
+        </button>
+        <button className="btn btn-secondary" onClick={fetchAll}>Refresh</button>
+        <span className={`pill ${status?.is_running ? 'pill-live' : 'pill-idle'}`}>
+          {status?.is_running ? 'Pipeline Live' : 'Pipeline Idle'}
+        </span>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">Total Events</div>
+          <div className="stat-value">{datasetStats.totalEvents.toLocaleString()}</div>
+          <div className="stat-trend">Normalized CloudTrail events</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Windows</div>
+          <div className="stat-value">{datasetStats.windows.toLocaleString()}</div>
+          <div className="stat-trend">Feature-engineered windows</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Ensemble Alerts</div>
+          <div className="stat-value">{datasetStats.alertsCount.toLocaleString()}</div>
+          <div className="stat-trend">Rows in ensemble_alerts.csv</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Attack Rate</div>
+          <div className="stat-value stat-warning">{datasetStats.attackRate.toFixed(1)}%</div>
+          <div className="stat-trend">Ground-truth flagged attacks</div>
         </div>
       </div>
 
-      {/* Current Status */}
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <div className="card-header">
-          <h3 className="card-title">Current Status</h3>
-          {status && getStatusBadge(status.status)}
-        </div>
-        {status && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-            <div>
-              <div className="stat-label">Last Run</div>
-              <div style={{ color: '#e2e8f0', fontWeight: 500 }}>
-                {formatDate(status.last_run_time)}
-              </div>
-            </div>
-            <div>
-              <div className="stat-label">Stages Completed</div>
-              <div style={{ color: '#10b981', fontWeight: 600, fontSize: '1.25rem' }}>
-                {status.stages_completed || 0}
-              </div>
-            </div>
-            <div>
-              <div className="stat-label">Stages Failed</div>
-              <div style={{ color: '#ef4444', fontWeight: 600, fontSize: '1.25rem' }}>
-                {status.stages_failed || 0}
-              </div>
-            </div>
-            {status.elapsed_time && (
-              <div>
-                <div className="stat-label">Elapsed Time</div>
-                <div style={{ color: '#e2e8f0', fontWeight: 500 }}>
-                  {status.elapsed_time.toFixed(2)}s
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Pipeline Configuration */}
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <div className="card-header">
-          <h3 className="card-title">Run Configuration</h3>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={runConfig.run_all_stages}
-              onChange={(e) => setRunConfig({ ...runConfig, run_all_stages: e.target.checked })}
-              style={{ width: 'auto', cursor: 'pointer' }}
-            />
-            <span>Run all pipeline stages (ingest → features → models)</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={runConfig.run_models}
-              onChange={(e) => setRunConfig({ ...runConfig, run_models: e.target.checked })}
-              style={{ width: 'auto', cursor: 'pointer' }}
-            />
-            <span>Run ML models (IF, LOF, Autoencoder, Ensemble)</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={runConfig.update_rag}
-              onChange={(e) => setRunConfig({ ...runConfig, update_rag: e.target.checked })}
-              style={{ width: 'auto', cursor: 'pointer' }}
-            />
-            <span>Update RAG vector database with new alerts</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Data Status */}
-      {dataStatus && (
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
-          <div className="card-header">
-            <h3 className="card-title">📁 Data Status</h3>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
-            {Object.entries(dataStatus).map(([key, value]) => (
-              <div key={key} style={{ 
-                background: '#334155', 
-                padding: '1rem', 
-                borderRadius: '0.5rem',
-                border: value.exists ? '1px solid #10b981' : '1px solid #64748b'
-              }}>
-                <div style={{ 
-                  fontSize: '0.875rem', 
-                  color: '#94a3b8', 
-                  marginBottom: '0.5rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em'
-                }}>
-                  {key.replace(/_/g, ' ')}
-                </div>
-                {value.exists ? (
-                  <>
-                    <div style={{ color: '#10b981', fontWeight: 600, marginBottom: '0.25rem' }}>
-                      ✓ Available
-                    </div>
-                    <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                      {value.rows?.toLocaleString()} rows • {formatBytes(value.size_bytes)}
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ color: '#64748b', fontWeight: 500 }}>
-                    ✗ Not found
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Execution History */}
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">📜 Execution History</h3>
+          <h3 className="card-title">14-Day Anomaly Score Timeline</h3>
         </div>
-        {history.length > 0 ? (
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Run ID</th>
-                  <th>Status</th>
-                  <th>Started</th>
-                  <th>Completed</th>
-                  <th>Duration</th>
-                  <th>Stages</th>
+        <div className="chart-area">
+          {timelineData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={timelineData} margin={{ top: 20, right: 24, left: 12, bottom: 14 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
+                <XAxis dataKey="window" tick={{ fontSize: 11 }} stroke="#475569" />
+                <YAxis domain={[0, 1]} stroke="#475569" />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="score" stroke="#123f73" strokeWidth={2} dot={false} name="Anomaly score" />
+                <Scatter dataKey="attackScore" fill="#b91c1c" name="Attack windows" />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="empty-note">No timeline points loaded. Check API base URL and backend /api/alerts response.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <h3 className="card-title">Latest Pipeline Runs</h3>
+        </div>
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Completed</th>
+                <th>Events Ingested</th>
+                <th>Alerts Generated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length > 0 ? history.map((run) => (
+                <tr key={run.run_id}>
+                  <td>{run.run_id}</td>
+                  <td>
+                    <span className={`badge ${run.status === 'success' ? 'badge-success' : run.status === 'failed' ? 'badge-high' : 'badge-low'}`}>
+                      {run.status}
+                    </span>
+                  </td>
+                  <td>{run.started_at ? new Date(run.started_at).toLocaleString() : '-'}</td>
+                  <td>{run.completed_at ? new Date(run.completed_at).toLocaleString() : '-'}</td>
+                  <td>{(run.events_ingested || 0).toLocaleString()}</td>
+                  <td>{(run.alerts_generated || 0).toLocaleString()}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {history.slice(0, 10).map((run, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
-                      {run.run_id?.substring(0, 8)}...
-                    </td>
-                    <td>{getStatusBadge(run.status)}</td>
-                    <td style={{ fontSize: '0.875rem' }}>{formatDate(run.start_time)}</td>
-                    <td style={{ fontSize: '0.875rem' }}>{formatDate(run.end_time)}</td>
-                    <td style={{ fontWeight: 500 }}>
-                      {run.elapsed_time ? `${run.elapsed_time.toFixed(2)}s` : 'N/A'}
-                    </td>
-                    <td>
-                      <span style={{ color: '#10b981' }}>{run.stages_completed || 0} ✓</span>
-                      {run.stages_failed > 0 && (
-                        <span style={{ color: '#ef4444', marginLeft: '0.5rem' }}>
-                          {run.stages_failed} ✗
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="empty-state">
-            <div className="empty-state-icon">📋</div>
-            <p>No pipeline executions yet</p>
-          </div>
-        )}
+              )) : (
+                <tr>
+                  <td colSpan="6" className="empty-note">No pipeline runs yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

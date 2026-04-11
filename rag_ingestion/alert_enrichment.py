@@ -22,14 +22,16 @@ Usage (imported):
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 PROJECT_ROOT = Path(__file__).parent.parent
 log = logging.getLogger(__name__)
@@ -43,6 +45,9 @@ KEY_FEATURE_COLS = [
     "iam_events_zscore", "s3_get_events_zscore", "iam_list_events_zscore",
     "iam_write_events_zscore", "s3_delete_events_zscore", "s3_get_slope_3d",
 ]
+
+RERANK_ALPHA = float(os.getenv("RAG_RERANK_ALPHA", "0.7"))
+RERANK_TOP_K = int(os.getenv("RAG_RERANK_TOP_K", "5"))
 
 
 class AlertEnricher:
@@ -61,12 +66,25 @@ class AlertEnricher:
     8. Assemble final enriched payload
     """
 
-    def __init__(self, neo4j_driver, chroma_client, embedder, use_graph_bridges: bool = True):
+    def __init__(
+        self,
+        neo4j_driver,
+        chroma_client,
+        embedder,
+        use_graph_bridges: bool = True,
+        neo4j_database: Optional[str] = None,
+    ):
         self.driver = neo4j_driver
         self.chroma = chroma_client
         self.embedder = embedder
         self.use_graph_bridges = use_graph_bridges  # Use pre-built graph bridges for matching
+        self.neo4j_database = neo4j_database or get_neo4j_config(require_credentials=False).get("database")
         self._init_chroma_collections()
+
+    def _session(self):
+        if self.neo4j_database:
+            return self.driver.session(database=self.neo4j_database)
+        return self.driver.session()
 
     def _init_chroma_collections(self):
         """Get ChromaDB collections."""
@@ -129,6 +147,13 @@ class AlertEnricher:
                 feature_values, event_context.get("event_names", [])
             )
 
+        matched_patterns = self._rerank_matched_patterns(
+            matched_patterns,
+            feature_values,
+            event_context,
+            top_k=RERANK_TOP_K,
+        )
+
         # Step 5: Get techniques + playbooks from graph
         graph_intel = self._get_graph_intel(matched_patterns)
 
@@ -183,6 +208,65 @@ class AlertEnricher:
         }
 
         return payload
+
+    def _rerank_matched_patterns(
+        self,
+        matched_patterns: List[Dict],
+        feature_values: Dict,
+        event_context: Dict,
+        top_k: int = 5,
+    ) -> List[Dict]:
+        """
+        Re-rank matched patterns with semantic relevance to the current alert context.
+
+        Combined score = alpha * graph_match_score + (1-alpha) * semantic_similarity.
+        """
+        if not matched_patterns:
+            return []
+        if not self.embedder:
+            return matched_patterns[:top_k]
+
+        try:
+            event_counts = event_context.get("event_counts", {}) if event_context else {}
+            top_events = sorted(event_counts.items(), key=lambda x: x[1], reverse=True)[:6]
+            event_text = " ".join([f"{name} x{cnt}" for name, cnt in top_events])
+
+            features_sorted = sorted(feature_values.items(), key=lambda x: abs(float(x[1])), reverse=True)[:8]
+            feature_text = " ".join([f"{k}={float(v):.2f}" for k, v in features_sorted])
+
+            alert_text = f"events: {event_text}; features: {feature_text}"
+
+            pattern_texts = []
+            for p in matched_patterns:
+                tech = " ".join(p.get("techniques", [])[:5])
+                pattern_texts.append(
+                    f"{p.get('name', '')}. {p.get('description', '')}. techniques: {tech}"
+                )
+
+            embeddings = self.embedder.encode([alert_text] + pattern_texts)
+            alert_vec = np.array(embeddings[0], dtype=float)
+            alert_norm = np.linalg.norm(alert_vec) + 1e-9
+
+            reranked = []
+            for i, p in enumerate(matched_patterns):
+                pat_vec = np.array(embeddings[i + 1], dtype=float)
+                pat_norm = np.linalg.norm(pat_vec) + 1e-9
+                cosine = float(np.dot(alert_vec, pat_vec) / (alert_norm * pat_norm))
+                semantic_similarity = (cosine + 1.0) / 2.0
+                base_score = float(p.get("match_score", 0.0))
+                combined = (RERANK_ALPHA * base_score) + ((1.0 - RERANK_ALPHA) * semantic_similarity)
+
+                updated = dict(p)
+                updated["base_match_score"] = round(base_score, 3)
+                updated["semantic_similarity"] = round(semantic_similarity, 3)
+                updated["retrieval_score"] = round(combined, 3)
+                reranked.append(updated)
+
+            reranked.sort(key=lambda x: x.get("retrieval_score", 0.0), reverse=True)
+            return reranked[:top_k]
+        except Exception as e:
+            log.debug(f"Pattern reranking failed, using original order: {e}")
+            return matched_patterns[:top_k]
 
     # ── Feature extraction ────────────────────────────────────────────────────
 
@@ -277,7 +361,7 @@ class AlertEnricher:
 
         matched = {}
 
-        with self.driver.session() as s:
+        with self._session() as s:
             # Path A: event name matching
             if event_names:
                 result = s.run("""
@@ -309,7 +393,7 @@ class AlertEnricher:
 
         # Path B: behavioral indicator matching
         if feature_values:
-            with self.driver.session() as s:
+            with self._session() as s:
                 result = s.run("""
                     MATCH (d:DetectionPattern)
                     WHERE d.behavioral_indicators IS NOT NULL
@@ -380,8 +464,7 @@ class AlertEnricher:
             return []
         
         window_id = f"{user}_{window}"
-        
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (u:User {name: $user})-[:HAD_WINDOW]->(w:Window {window_id: $window_id})
                 MATCH (w)-[ti:TRIGGERS_INDICATOR]->(d:DetectionPattern)
@@ -409,7 +492,6 @@ class AlertEnricher:
             
             patterns = []
             for rec in result:
-                # Parse containment steps (stored as JSON string)
                 playbooks = []
                 for pb in rec["playbooks"]:
                     if pb.get("id"):
@@ -440,7 +522,69 @@ class AlertEnricher:
                 })
             
             log.info(f"Matched {len(patterns)} detection patterns via graph bridges")
-            return patterns[:5]  # Top 5
+            if patterns:
+                return patterns[:5]  # Top 5
+
+            # Fallback: use event-level MATCHES_PATTERN edges in the same 5-min window
+            fallback = s.run("""
+                MATCH (u:User {name: $user})-[:PERFORMED]->(e:Event)-[:MATCHES_PATTERN]->(d:DetectionPattern)
+                WHERE datetime(e.eventTime) >= datetime($window)
+                  AND datetime(e.eventTime) < datetime($window) + duration({minutes: 5})
+                OPTIONAL MATCH (t:MITRETechnique)-[:DETECTED_BY]->(d)
+                OPTIONAL MATCH (d)-[:TRIGGERS]->(p:Playbook)
+                RETURN d.id as pattern_id,
+                       d.name as pattern_name,
+                       d.severity as severity,
+                       d.description as description,
+                       d.false_positive_sources as fp,
+                       d.techniques_detected as techniques,
+                       collect(DISTINCT t.technique_id) as technique_ids_from_graph,
+                       collect(DISTINCT {
+                           id: p.id,
+                           name: p.name,
+                           triage: p.triage_questions,
+                           containment: p.containment_steps,
+                           incident_types: p.incident_types
+                       }) as playbooks,
+                       count(e) as event_hits
+                ORDER BY event_hits DESC
+            """, user=user, window=window)
+
+            fallback_patterns = []
+            for rec in fallback:
+                playbooks = []
+                for pb in rec["playbooks"]:
+                    if pb.get("id"):
+                        try:
+                            containment = json.loads(pb.get("containment") or "[]")
+                        except (json.JSONDecodeError, TypeError):
+                            containment = []
+                        playbooks.append({
+                            "playbook_id": pb["id"],
+                            "name": pb["name"] or "",
+                            "incident_types": pb.get("incident_types") or [],
+                            "triage_questions": pb.get("triage") or [],
+                            "containment_steps": containment[:3],
+                        })
+
+                fallback_patterns.append({
+                    "pattern_id": rec["pattern_id"],
+                    "name": rec["pattern_name"] or "",
+                    "severity": rec["severity"] or "",
+                    "description": rec["description"] or "",
+                    "techniques": rec["techniques"] or [],
+                    "triggers_playbook": rec["techniques"] or [],
+                    "false_positive_sources": rec["fp"] or [],
+                    "match_reason": "graph_bridge_event_match",
+                    "match_score": round(min(0.95, 0.5 + (0.05 * rec["event_hits"])), 3),
+                    "matched_features": [],
+                    "playbooks": playbooks,
+                })
+
+            log.info(
+                f"No indicator-edge matches for window; fallback event-match patterns: {len(fallback_patterns)}"
+            )
+            return fallback_patterns[:5]
 
     def _score_behavioral_match(self, feature_values: Dict, bi: Dict) -> float:
         """
@@ -478,7 +622,7 @@ class AlertEnricher:
         pattern_ids = [p["pattern_id"] for p in matched_patterns]
         techniques, playbooks, services = {}, {}, {}
 
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (d:DetectionPattern)
                 WHERE d.id IN $pattern_ids
@@ -544,7 +688,7 @@ class AlertEnricher:
             return []
 
         chain_playbooks = {}
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (t1:MITRETechnique)-[:ENABLES]->(t2:MITRETechnique)
                 WHERE t1.technique_id IN $tech_ids
@@ -821,21 +965,22 @@ def main():
         datefmt="%H:%M:%S"
     )
 
-    import os
     import chromadb
     from neo4j import GraphDatabase
     from sentence_transformers import SentenceTransformer
 
-    neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_pass = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    neo4j_cfg = get_neo4j_config(require_credentials=True)
+    neo4j_uri = neo4j_cfg["uri"]
+    neo4j_user = neo4j_cfg["username"]
+    neo4j_pass = neo4j_cfg["password"]
+    neo4j_db = neo4j_cfg.get("database")
 
     log.info("Connecting to Neo4j and ChromaDB...")
     driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_pass))
     client = chromadb.PersistentClient(path=str(PROJECT_ROOT / "chroma_db"))
     embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-    enricher = AlertEnricher(driver, client, embedder)
+    enricher = AlertEnricher(driver, client, embedder, neo4j_database=neo4j_db)
 
     log.info("Loading data...")
     feature_df, normalized_df, alerts_df = load_data()

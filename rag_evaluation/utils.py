@@ -91,28 +91,17 @@ def load_incident_reports(
 
 def extract_playbooks_from_report(report_content: str) -> List[str]:
     """
-    Extract playbook IDs/names from incident report text.
-    
-    Args:
-        report_content: Full text of incident report
-        
+    Extract playbook IDs from incident report text.
+
+    Matches the IR-* format used throughout the system
+    (e.g. IR-IAM-001, IR-DESTRUCT-001, IR-S3-002).
+
     Returns:
-        List of playbook identifiers
+        List of unique playbook IDs
     """
-    playbooks = []
-    
-    # Match patterns like "PB_001", "pb-incident-response", etc.
-    patterns = [
-        r"(?:Playbook|playbook|PLAYBOOK)[:\s]+([PB_\w\-]+)",
-        r"(PB_\d+)",
-        r"(pb-[\w\-]+)",
-    ]
-    
-    for pattern in patterns:
-        matches = re.findall(pattern, report_content, re.IGNORECASE)
-        playbooks.extend(matches)
-    
-    return list(set(playbooks))  # Remove duplicates
+    # Primary format used in this system: IR-<SERVICE>-<NUM>
+    matches = re.findall(r"\bIR-[A-Z]+-\d+\b", report_content)
+    return list(set(matches))
 
 
 def extract_mitre_techniques(report_content: str) -> List[str]:

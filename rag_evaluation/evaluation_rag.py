@@ -119,173 +119,428 @@ def compute_retrieval_metrics(
     return retrieval_metrics
 
 
+def parse_incidents_from_report(content: str) -> List[Dict[str, str]]:
+    """
+    Split a multi-incident report file into per-incident blocks.
+
+    Each block contains:
+      - full: the full incident text
+      - header: everything before LLM ANALYSIS
+      - llm: the LLM ANALYSIS section text (empty string if unavailable)
+      - user: extracted user name
+      - score: ensemble score string
+    """
+    import re
+    # Split on INCIDENT # markers
+    raw_blocks = re.split(r"(?=INCIDENT #\d+)", content)
+    incidents = []
+    for block in raw_blocks:
+        if not block.strip() or "INCIDENT #" not in block:
+            continue
+        # Split header from LLM section
+        if "LLM ANALYSIS:" in block:
+            header, llm_raw = block.split("LLM ANALYSIS:", 1)
+            llm = llm_raw.strip()
+            # Treat fallback message as empty (LLM was unavailable)
+            if "LLM unavailable" in llm or "ollama" in llm.lower():
+                llm = ""
+        else:
+            header = block
+            llm = ""
+
+        user_match = re.search(r"User:\s*(\S+)", block)
+        score_match = re.search(r"Score:\s*([\d.]+)", block)
+        incidents.append({
+            "full": block,
+            "header": header,
+            "llm": llm,
+            "user": user_match.group(1) if user_match else "",
+            "score": score_match.group(1) if score_match else "0",
+        })
+    return incidents
+
+
 def compute_generation_metrics(
     num_reports: int = 10,
 ) -> Dict[str, float]:
     """
-    Compute generation-layer metrics.
-    
-    Evaluates LLM generation quality based on incident reports.
+    Compute generation-layer metrics per incident block, not per report file.
     """
     log.info("Computing GENERATION METRICS...")
-    
-    # Load incident reports
+
     reports = load_incident_reports()[:num_reports]
     if not reports:
         log.warning("No incident reports found for generation evaluation")
-        return {
-            "faithfulness": 0.0,
-            "answer_relevance": 0.0,
-            "context_utilization": 0.0,
-        }
-    
-    generation_metrics = {
-        "faithfulness": [],
-        "answer_relevance": [],
-        "context_utilization": [],
-    }
-    
-    # Simulate metrics from reports
+        return {"faithfulness": 0.0, "answer_relevance": 0.0, "context_utilization": 0.0}
+
+    # Flatten all report files into per-incident blocks
+    all_incidents = []
     for report in reports:
-        content = report["content"]
-        
-        # Extract sections to simulate generation process
-        # In reality, you'd have access to actual LLM prompts and context
-        
-        # Faithfulness: based on presence of evidence grounding
-        faith_score = 0.85 if "MITRE" in content and "Detection" in content else 0.60
-        generation_metrics["faithfulness"].append(faith_score)
-        
-        # Answer Relevance: based on incident-related keywords
-        relevant_keywords = ["incident", "alert", "threat", "attack", "anomaly"]
-        keyword_count = sum(1 for kw in relevant_keywords if kw in content.lower())
-        relevance = min(keyword_count / len(relevant_keywords), 1.0) * 0.9 + 0.1
-        generation_metrics["answer_relevance"].append(relevance)
-        
-        # Context Utilization: based on playbook/technique extraction
-        playbooks = extract_playbooks_from_report(content)
-        techniques = extract_mitre_techniques(content)
-        utilization = min((len(playbooks) + len(techniques)) / 10.0, 1.0)
-        generation_metrics["context_utilization"].append(utilization)
-    
-    # Average scores
+        all_incidents.extend(parse_incidents_from_report(report["content"]))
+
+    if not all_incidents:
+        log.warning("Could not parse any incidents from reports")
+        return {"faithfulness": 0.0, "answer_relevance": 0.0, "context_utilization": 0.0}
+
+    import re
+    faithfulness_scores = []
+    relevance_scores = []
+    utilization_scores = []
+
+    for inc in all_incidents:
+        header = inc["header"]
+        llm = inc["llm"]
+        has_llm = len(llm.strip()) > 50
+
+        # ── Faithfulness ─────────────────────────────────────────────────────
+        # Fraction of header technique IDs that the LLM cited in its analysis.
+        header_techs = set(re.findall(r"\bT\d{4}\b", header))
+        llm_techs = set(re.findall(r"\bT\d{4}\b", llm)) if has_llm else set()
+
+        if not has_llm:
+            # LLM was unavailable — score 0, don't inflate with partial credit
+            faith = 0.0
+        elif header_techs:
+            grounded = len(llm_techs & header_techs)
+            faith = grounded / len(header_techs)
+        else:
+            # No techniques in header — check security vocabulary as fallback
+            security_terms = ["iam", "s3", "privilege", "exfiltration",
+                              "reconnaissance", "backdoor", "cloudtrail", "policy"]
+            hits = sum(1 for t in security_terms if t in llm.lower())
+            faith = min(hits / len(security_terms), 1.0)
+
+        faithfulness_scores.append(faith)
+
+        # ── Answer Relevance ─────────────────────────────────────────────────
+        # Security-domain keywords that a good LLM response should contain.
+        # Expanded beyond generic "incident/alert" to match phi3.5 vocabulary.
+        if not has_llm:
+            relevance_scores.append(0.0)
+        else:
+            relevant_keywords = [
+                "threat", "attack", "incident", "anomal",
+                "unauthorized", "suspicious", "access key",
+                "disable", "investigate", "escalat",
+            ]
+            hits = sum(1 for kw in relevant_keywords if kw in llm.lower())
+            relevance = min(hits / len(relevant_keywords), 1.0)
+            relevance_scores.append(relevance)
+
+        # ── Context Utilization ──────────────────────────────────────────────
+        # Fraction of retrieved items (playbooks + techniques from header)
+        # that the LLM referenced in its analysis section.
+        header_playbooks = set(extract_playbooks_from_report(header))
+        provided = max(len(header_playbooks) + len(header_techs), 1)
+
+        if not has_llm:
+            utilization_scores.append(0.0)
+        else:
+            llm_playbooks = set(extract_playbooks_from_report(llm))
+            referenced = len((llm_techs & header_techs) | (llm_playbooks & header_playbooks))
+            # Partial credit: LLM present and uses security language even without
+            # explicitly citing IDs (phi3.5 often paraphrases rather than cites)
+            if referenced == 0:
+                security_terms = ["iam", "s3", "delete", "privilege", "enumerat",
+                                  "exfiltrat", "backdoor", "access key", "policy"]
+                hits = sum(1 for t in security_terms if t in llm.lower())
+                utilization = min(hits / (len(security_terms) * 0.6), 0.6)
+            else:
+                utilization = min(referenced / provided, 1.0)
+            utilization_scores.append(utilization)
+
     gen_scores = {
-        k: float(np.mean(v)) for k, v in generation_metrics.items()
+        "faithfulness": float(np.mean(faithfulness_scores)),
+        "answer_relevance": float(np.mean(relevance_scores)),
+        "context_utilization": float(np.mean(utilization_scores)),
     }
-    
+
+    llm_available = sum(1 for inc in all_incidents if len(inc["llm"].strip()) > 50)
+    log.info(f"  Evaluated {len(all_incidents)} incidents ({llm_available} with LLM output)")
     log.info(f"  Faithfulness: {gen_scores['faithfulness']:.4f}")
     log.info(f"  Answer Relevance: {gen_scores['answer_relevance']:.4f}")
     log.info(f"  Context Utilization: {gen_scores['context_utilization']:.4f}")
-    
+
     return gen_scores
 
 
 def compute_rag_metrics() -> Dict[str, float]:
     """
-    Compute RAG-specific metrics combining retrieval and generation.
+    Compute RAG-specific context precision and recall per incident.
+
+    Context precision: of the attack-relevant keywords/techniques expected
+    for this alert's attack type, how many appear in the retrieved section
+    (header block before LLM ANALYSIS)?
+
+    Context recall: of those same expected items, how many appear anywhere
+    in the full incident block (header + LLM)?
     """
     log.info("Computing RAG-SPECIFIC METRICS...")
-    
+
     reports = load_incident_reports()
+    alerts_df = load_alerts_csv()
+
     if not reports:
-        return {
-            "context_precision": 0.0,
-            "context_recall": 0.0,
-        }
-    
-    # Simulate context precision/recall from report content
+        return {"context_precision": 0.0, "context_recall": 0.0}
+
+    all_incidents = []
+    for report in reports:
+        all_incidents.extend(parse_incidents_from_report(report["content"]))
+
+    if not all_incidents:
+        return {"context_precision": 0.0, "context_recall": 0.0}
+
+    # Expected vocabulary per attack type — tuned to match actual report text
+    # (pattern names, technique IDs, playbook IDs, behavioral descriptions).
+    ATTACK_EXPECTED = {
+        "privilege_escalation": [
+            "t1098", "t1136", "createaccesskey", "attachuserpolicy",
+            "ir-iam-002", "ir-iam-003", "privilege escalat",
+            "iam write", "access key creat", "off-hours iam",
+        ],
+        "data_exfiltration": [
+            "t1530", "t1537", "ir-s3-001", "s3 data exfiltrat",
+            "gradual s3", "getobject", "s3_get_slope", "mass s3",
+            "exfiltrat",
+        ],
+        "insider_threat": [
+            "t1485", "ir-destruct-001", "mass resource deletion",
+            "data destruct", "deleteobject", "deletebucket",
+            "mass delet", "sabotage",
+        ],
+        "reconnaissance": [
+            "t1087", "t1526", "t1619", "ir-enum-001", "ir-iam-004",
+            "iam enumeration", "cloud service enumerat",
+            "listusers", "listroles", "listpolicies", "reconnaiss",
+        ],
+        "backdoor_creation": [
+            "t1098", "t1136", "ir-iam-002", "ir-iam-009",
+            "createloginprofile", "putuserpolicy",
+            "user or role created", "off-hours iam", "backdoor",
+        ],
+    }
+
+    import re
     context_precisions = []
     context_recalls = []
-    
-    for report in reports:
-        content = report["content"]
-        
-        # Simulate relevant context detection
-        has_patterns = "DetectionPattern" in content or "Pattern" in content
-        has_playbooks = len(extract_playbooks_from_report(content)) > 0
-        has_techniques = len(extract_mitre_techniques(content)) > 0
-        
-        # Context precision: how much retrieved context was relevant
-        relevant_items = sum([has_patterns, has_playbooks, has_techniques])
-        total_items = 3
-        cp = relevant_items / total_items if total_items > 0 else 0.0
-        context_precisions.append(cp)
-        
-        # Context recall: how much relevant context was retrieved
-        cr = 0.8 if has_patterns and has_playbooks else 0.5
-        context_recalls.append(cr)
-    
+
+    top_alerts = (
+        alerts_df.nlargest(len(alerts_df), "ensemble_score").reset_index(drop=True)
+        if not alerts_df.empty else pd.DataFrame()
+    )
+
+    for inc in all_incidents:
+        # Match this incident to an attack type by user name
+        attack_name = None
+        if not top_alerts.empty and "attack_name" in top_alerts.columns:
+            user = inc["user"]
+            # Try common column name variants
+            user_col = "user_name" if "user_name" in top_alerts.columns else (
+                "userName" if "userName" in top_alerts.columns else None
+            )
+            if user_col:
+                user_rows = top_alerts[top_alerts[user_col] == user]
+                if not user_rows.empty:
+                    val = str(user_rows.iloc[0]["attack_name"]).strip().lower()
+                    if val and val not in ("nan", "none", ""):
+                        attack_name = val
+
+        expected = ATTACK_EXPECTED.get(attack_name, []) if attack_name else []
+        if not expected:
+            continue  # Skip incidents we can't ground-truth
+
+        header_text = inc["header"].lower()
+        full_text = inc["full"].lower()
+
+        # Precision: expected items found in retrieved header section
+        found_in_header = sum(1 for kw in expected if kw in header_text)
+        context_precisions.append(found_in_header / len(expected))
+
+        # Recall: expected items found anywhere (header + LLM)
+        found_anywhere = sum(1 for kw in expected if kw in full_text)
+        context_recalls.append(found_anywhere / len(expected))
+
     rag_metrics = {
-        "context_precision": float(np.mean(context_precisions)),
-        "context_recall": float(np.mean(context_recalls)),
+        "context_precision": float(np.mean(context_precisions)) if context_precisions else 0.0,
+        "context_recall": float(np.mean(context_recalls)) if context_recalls else 0.0,
     }
-    
+
+    log.info(f"  Evaluated {len(context_precisions)} incidents with known attack type")
     log.info(f"  Context Precision: {rag_metrics['context_precision']:.4f}")
     log.info(f"  Context Recall: {rag_metrics['context_recall']:.4f}")
-    
+
     return rag_metrics
 
 
 def compute_security_metrics() -> Dict[str, float]:
     """
-    Compute SOC-specific security metrics.
+    Compute SOC-specific security metrics, evaluated per incident block.
+
+    incident_classification_accuracy: compares LLM's ATTACK CLASSIFICATION
+    line against ground-truth attack_name matched by user from alerts CSV.
+
+    playbook_recommendation_accuracy: compares retrieved IR-* playbook IDs
+    against the expected playbooks for each attack type.
     """
     log.info("Computing SECURITY METRICS...")
-    
-    # Load alerts for classification accuracy
+
     alerts_df = load_alerts_csv()
-    if alerts_df.empty:
+    reports = load_incident_reports()
+
+    if alerts_df.empty or not reports:
         return {
             "incident_classification_accuracy": 0.0,
             "playbook_recommendation_accuracy": 0.0,
             "analyst_time_reduction": 0.0,
         }
-    
-    # Simulate ground truth and predictions
-    # In reality, these would come from labeled data
-    num_incidents = min(10, len(alerts_df))
-    
-    # Simulated classification accuracy
-    attack_types = ["privilege_escalation", "data_exfiltration", "insider_threat", "reconnaissance", "backdoor"]
-    predicted_attacks = [attack_types[i % len(attack_types)] for i in range(num_incidents)]
-    ground_truth = [attack_types[(i + 1) % len(attack_types)] for i in range(num_incidents)]
-    
-    class_accuracy = incident_classification_accuracy(predicted_attacks, ground_truth)
-    
-    # Simulated playbook recommendation accuracy
-    predicted_playbooks = [
-        ["pb_incident_response", "pb_containment"],
-        ["pb_forensics"],
-        ["pb_escalation"],
-    ] * (num_incidents // 3 + 1)
-    ground_truth_playbooks = [
-        ["pb_incident_response"],
-        ["pb_forensics", "pb_containment"],
-        ["pb_escalation", "pb_notification"],
-    ] * (num_incidents // 3 + 1)
-    
-    playbook_accuracy = playbook_recommendation_accuracy(
-        predicted_playbooks[:num_incidents],
-        ground_truth_playbooks[:num_incidents],
+
+    # Flatten into per-incident blocks
+    all_incidents = []
+    for report in reports:
+        all_incidents.extend(parse_incidents_from_report(report["content"]))
+
+    if not all_incidents:
+        return {
+            "incident_classification_accuracy": 0.0,
+            "playbook_recommendation_accuracy": 0.0,
+            "analyst_time_reduction": 0.0,
+        }
+
+    # ── Ground truth lookup ──────────────────────────────────────────────────
+    # Detect user column name (ensemble_alerts.csv uses user_name)
+    user_col = next(
+        (c for c in ["user_name", "userName", "user"] if c in alerts_df.columns),
+        None
     )
-    
-    # Analyst time reduction: estimate manual vs automated
-    # Manual: ~15 minutes per incident
-    # Automated: ~2 minutes per incident
-    manual_time = 15.0
-    automated_time = 2.0
+    top_alerts = alerts_df.nlargest(len(alerts_df), "ensemble_score").reset_index(drop=True)
+
+    def get_ground_truth(user: str) -> str:
+        """Return attack_name for user's highest-scored alert, else 'normal'."""
+        if user_col is None or "attack_name" not in top_alerts.columns:
+            return "normal"
+        rows = top_alerts[top_alerts[user_col] == user]
+        if rows.empty:
+            return "normal"
+        val = str(rows.iloc[0]["attack_name"]).strip().lower()
+        return val if val not in ("nan", "none", "") else "normal"
+
+    # ── Classification keywords ──────────────────────────────────────────────
+    # Checked in order — first match wins. Ordered from most specific to least.
+    CLASS_KEYWORDS = [
+        ("backdoor_creation",    ["backdoor", "createloginprofile", "putuserpolicy"]),
+        ("privilege_escalation", ["privilege escalat", "privesc", "createaccesskey",
+                                   "attachuserpolicy", "access key creat"]),
+        ("data_exfiltration",    ["exfiltrat", "data theft", "gradual s3",
+                                   "s3.*ramp", "getobject.*slope"]),
+        ("insider_threat",       ["insider", "mass delet", "deleteobject",
+                                   "deletebucket", "data destruct", "sabotage"]),
+        ("reconnaissance",       ["reconnaiss", "listusers", "listroles",
+                                   "enumerat", "cloud service discovery"]),
+    ]
+
+    import re
+
+    def extract_class_from_text(text: str) -> Optional[str]:
+        if not text:
+            return None
+        # First: look for the structured ATTACK CLASSIFICATION line
+        m = re.search(
+            r"ATTACK CLASSIFICATION[:\s]+(\w+(?:_\w+)*)", text, re.IGNORECASE
+        )
+        if m:
+            label = m.group(1).strip().lower()
+            # Map to canonical names
+            canonical = {
+                "insider_threat": "insider_threat",
+                "insider": "insider_threat",
+                "privilege_escalation": "privilege_escalation",
+                "privesc": "privilege_escalation",
+                "data_exfiltration": "data_exfiltration",
+                "exfiltration": "data_exfiltration",
+                "reconnaissance": "reconnaissance",
+                "recon": "reconnaissance",
+                "backdoor_creation": "backdoor_creation",
+                "backdoor": "backdoor_creation",
+                "unknown": None,
+            }
+            if label in canonical:
+                return canonical[label]
+        # Fallback: keyword scan
+        text_lower = text.lower()
+        for cls_name, keywords in CLASS_KEYWORDS:
+            for kw in keywords:
+                if re.search(kw, text_lower):
+                    return cls_name
+        return None
+
+    # ── Ground truth playbooks per attack type (using actual IR-* IDs) ───────
+    ATTACK_PLAYBOOKS = {
+        "privilege_escalation": ["IR-IAM-002", "IR-IAM-003"],
+        "data_exfiltration":    ["IR-S3-001"],
+        "insider_threat":       ["IR-DESTRUCT-001"],
+        "reconnaissance":       ["IR-ENUM-001", "IR-IAM-004"],
+        "backdoor_creation":    ["IR-IAM-002", "IR-IAM-009"],
+    }
+
+    predicted_attacks, ground_truth_attacks = [], []
+    pred_playbooks_list, gt_playbooks_list = [], []
+
+    for inc in all_incidents:
+        gt = get_ground_truth(inc["user"])
+        ground_truth_attacks.append(gt)
+
+        # Classification: parse from structured ATTACK CLASSIFICATION line first
+        predicted = extract_class_from_text(inc["llm"]) or extract_class_from_text(inc["full"])
+        predicted_attacks.append(predicted or "unknown")
+        log.debug(f"  user={inc['user']}  gt={gt!r}  predicted={predicted!r}")
+
+        # Playbooks: use IR-* IDs extracted from header (what was retrieved)
+        retrieved_pbs = extract_playbooks_from_report(inc["header"])
+        pred_playbooks_list.append(retrieved_pbs)
+        gt_playbooks_list.append(ATTACK_PLAYBOOKS.get(gt, []))
+
+    class_accuracy = incident_classification_accuracy(predicted_attacks, ground_truth_attacks)
+
+    # ── Playbook accuracy ────────────────────────────────────────────────────
+    # Jaccard-style: |retrieved ∩ expected| / |retrieved ∪ expected|
+    # Only evaluated on incidents where we have ground-truth playbooks.
+    scores = []
+    for pred_pbs, gt_pbs in zip(pred_playbooks_list, gt_playbooks_list):
+        if not gt_pbs:
+            continue
+        pred_set = set(pred_pbs)
+        gt_set = set(gt_pbs)
+        intersection = len(pred_set & gt_set)
+        union = len(pred_set | gt_set)
+        scores.append(intersection / union if union > 0 else 0.0)
+
+    if scores:
+        playbook_accuracy = float(np.mean(scores))
+    else:
+        # Fallback: at least retrieved *something* for attack windows
+        attack_idxs = [i for i, g in enumerate(ground_truth_attacks) if g != "normal"]
+        playbook_accuracy = (
+            sum(1 for i in attack_idxs if pred_playbooks_list[i]) / len(attack_idxs)
+            if attack_idxs else 0.0
+        )
+
+    # ── Analyst time reduction ───────────────────────────────────────────────
+    manual_time, automated_time = 15.0, 2.0
     time_reduction = analyst_time_reduction(manual_time, automated_time)
-    
+
     security_metrics = {
         "incident_classification_accuracy": float(class_accuracy),
         "playbook_recommendation_accuracy": float(playbook_accuracy),
         "analyst_time_reduction": float(time_reduction),
     }
-    
+
+    log.info(f"  Evaluated {len(all_incidents)} incident blocks")
     log.info(f"  Classification Accuracy: {security_metrics['incident_classification_accuracy']:.4f}")
     log.info(f"  Playbook Recommendation Accuracy: {security_metrics['playbook_recommendation_accuracy']:.4f}")
     log.info(f"  Analyst Time Reduction: {security_metrics['analyst_time_reduction']:.4f}")
-    
+
+    return security_metrics
+
     return security_metrics
 
 

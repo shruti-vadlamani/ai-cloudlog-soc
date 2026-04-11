@@ -1,11 +1,13 @@
 """
 backend/api/rag.py
 ===================
-API endpoints for RAG-powered queries
+API endpoints for RAG-powered queries and graph exploration.
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
+from neo4j import GraphDatabase
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 from backend.models.schemas import (
     RAGQueryRequest,
@@ -15,6 +17,314 @@ from backend.models.schemas import (
 from backend.services.rag_service import get_rag_service, RAGService
 
 router = APIRouter()
+
+
+def _graph_session():
+    cfg = get_neo4j_config(require_credentials=True)
+    driver = GraphDatabase.driver(
+        cfg["uri"],
+        auth=(cfg["username"], cfg["password"]),
+    )
+    session_kwargs = {"database": cfg.get("database")} if cfg.get("database") else {}
+    return driver, driver.session(**session_kwargs)
+
+
+def _node_key(label: str, props: dict) -> str:
+    if label == "User":
+        return str(props.get("name", "unknown"))
+    if label == "Window":
+        return str(props.get("window_id", "unknown"))
+    if label == "DetectionPattern":
+        return str(props.get("id", "unknown"))
+    if label == "MITRETechnique":
+        return str(props.get("technique_id", "unknown"))
+    if label == "Playbook":
+        return str(props.get("id", "unknown"))
+    return str(props.get("id", props.get("name", "unknown")))
+
+
+def _node_label(label: str, props: dict) -> str:
+    if label == "User":
+        return str(props.get("name", "User"))
+    if label == "Window":
+        user = str(props.get("user_name", "user"))
+        window = str(props.get("window", ""))
+        short = window.replace("T", " ")
+        if "+" in short:
+            short = short.split("+")[0]
+        if len(short) >= 16:
+            short = short[5:16]
+        return f"{user} {short}".strip()
+    if label == "DetectionPattern":
+        return str(props.get("name", "Pattern"))
+    if label == "MITRETechnique":
+        return str(props.get("technique_id", "Technique"))
+    if label == "Playbook":
+        return str(props.get("id", "Playbook"))
+    return str(props.get("name", label))
+
+
+def _serialize_node(node):
+    if node is None:
+        return None
+    labels = list(node.labels)
+    label = labels[0] if labels else "Node"
+    props = dict(node)
+    key = _node_key(label, props)
+    return {
+        "id": f"{label}:{key}",
+        "type": label,
+        "key": key,
+        "label": _node_label(label, props),
+        "properties": props,
+    }
+
+
+def _add_node(nodes: dict, node):
+    payload = _serialize_node(node)
+    if not payload:
+        return
+    nodes[payload["id"]] = payload
+
+
+def _add_edge(edges: dict, rel, src_node, dst_node):
+    if rel is None or src_node is None or dst_node is None:
+        return
+    src = _serialize_node(src_node)
+    dst = _serialize_node(dst_node)
+    if not src or not dst:
+        return
+    rel_type = rel.type
+    edge_id = f"{rel_type}:{src['id']}->{dst['id']}"
+    edges[edge_id] = {
+        "id": edge_id,
+        "source": src["id"],
+        "target": dst["id"],
+        "type": rel_type,
+        "properties": dict(rel),
+    }
+
+
+def _match_context(label: str, props: dict) -> str:
+    if label == "Window":
+        return (
+            f"window={props.get('window', props.get('window_start', 'unknown'))}, "
+            f"score={props.get('ensemble_score', 'n/a')}, "
+            f"attack={props.get('attack_name', 'unknown')}"
+        )
+    if label == "DetectionPattern":
+        return f"severity={props.get('severity', 'unknown')}, threshold={props.get('anomaly_score_threshold', 'n/a')}"
+    if label == "MITRETechnique":
+        return f"technique={props.get('technique_id', props.get('id', 'unknown'))}"
+    if label == "Playbook":
+        return f"playbook={props.get('id', 'unknown')}"
+    if label == "User":
+        return f"user={props.get('name', 'unknown')}"
+    return "related entity"
+
+
+@router.get("/graph/subgraph", response_model=dict)
+def get_graph_subgraph(
+    attack_type: str = Query("", description="Filter by attack_name from Window nodes"),
+    technique_id: str = Query("", description="Filter by MITRE technique id"),
+    limit: int = Query(30, ge=5, le=80, description="Max seed windows"),
+):
+    """Return a compact graph for initial rendering in the explorer."""
+    driver, session = _graph_session()
+    try:
+        rows = session.run(
+            """
+            MATCH (w:Window)
+            WHERE ($attack_type = '' OR w.attack_name = $attack_type)
+              AND ($technique_id = '' OR EXISTS {
+                    MATCH (w)-[:TRIGGERS_INDICATOR]->(:DetectionPattern)<-[:DETECTED_BY]-(t:MITRETechnique {technique_id: $technique_id})
+                  })
+            WITH w
+            ORDER BY w.ensemble_score DESC
+            LIMIT $limit
+            OPTIONAL MATCH (u:User)-[hw:HAD_WINDOW]->(w)
+            OPTIONAL MATCH (w)-[ti:TRIGGERS_INDICATOR]->(d:DetectionPattern)
+            OPTIONAL MATCH (d)<-[db:DETECTED_BY]-(t:MITRETechnique)
+            OPTIONAL MATCH (d)-[tr:TRIGGERS]->(p:Playbook)
+            RETURN u,w,d,t,p,
+                   hw, startNode(hw) as hw_src, endNode(hw) as hw_dst,
+                   ti, startNode(ti) as ti_src, endNode(ti) as ti_dst,
+                   db, startNode(db) as db_src, endNode(db) as db_dst,
+                   tr, startNode(tr) as tr_src, endNode(tr) as tr_dst
+            """,
+            attack_type=attack_type,
+            technique_id=technique_id,
+            limit=limit,
+        )
+
+        nodes = {}
+        edges = {}
+        for rec in rows:
+            for key in ["u", "w", "d", "t", "p"]:
+                _add_node(nodes, rec.get(key))
+
+            _add_edge(edges, rec.get("hw"), rec.get("hw_src"), rec.get("hw_dst"))
+            _add_edge(edges, rec.get("ti"), rec.get("ti_src"), rec.get("ti_dst"))
+            _add_edge(edges, rec.get("db"), rec.get("db_src"), rec.get("db_dst"))
+            _add_edge(edges, rec.get("tr"), rec.get("tr_src"), rec.get("tr_dst"))
+
+        return {
+            "nodes": list(nodes.values()),
+            "edges": list(edges.values()),
+        }
+    finally:
+        session.close()
+        driver.close()
+
+
+@router.post("/graph/expand", response_model=dict)
+def expand_graph_node(
+    node_type: str = Body(..., embed=True),
+    node_key: str = Body(..., embed=True),
+    limit: int = Body(30, embed=True),
+):
+    """Expand one-hop neighbors for a selected node in the graph explorer."""
+    label_map = {
+        "User": ("User", "name"),
+        "Window": ("Window", "window_id"),
+        "DetectionPattern": ("DetectionPattern", "id"),
+        "MITRETechnique": ("MITRETechnique", "technique_id"),
+        "Playbook": ("Playbook", "id"),
+    }
+    if node_type not in label_map:
+        raise HTTPException(status_code=400, detail=f"Unsupported node_type: {node_type}")
+
+    label, key_prop = label_map[node_type]
+    driver, session = _graph_session()
+    try:
+        rows = session.run(
+            f"""
+            MATCH (n:{label} {{{key_prop}: $node_key}})-[r]-(m)
+            RETURN n, m, r, startNode(r) as r_src, endNode(r) as r_dst
+            LIMIT $limit
+            """,
+            node_key=node_key,
+            limit=max(1, min(limit, 120)),
+        )
+
+        nodes = {}
+        edges = {}
+        for rec in rows:
+            _add_node(nodes, rec.get("n"))
+            _add_node(nodes, rec.get("m"))
+            _add_edge(edges, rec.get("r"), rec.get("r_src"), rec.get("r_dst"))
+
+        return {
+            "nodes": list(nodes.values()),
+            "edges": list(edges.values()),
+        }
+    finally:
+        session.close()
+        driver.close()
+
+
+@router.post("/graph/query", response_model=dict)
+def query_graph_insights(
+    query: str = Body(..., embed=True, min_length=2),
+    limit: int = Body(25, embed=True, ge=5, le=80),
+):
+    """Search graph entities with natural language keywords and return an explainable subgraph."""
+    q = query.strip().lower()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    driver, session = _graph_session()
+    try:
+        rows = session.run(
+            """
+            MATCH (n)
+            WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+              AND (
+                toLower(coalesce(n.name, '')) CONTAINS $q
+                OR toLower(coalesce(n.id, '')) CONTAINS $q
+                OR toLower(coalesce(n.technique_id, '')) CONTAINS $q
+                OR toLower(coalesce(n.attack_name, '')) CONTAINS $q
+                OR toLower(coalesce(n.window_id, '')) CONTAINS $q
+                OR toLower(coalesce(n.user_name, '')) CONTAINS $q
+                OR toLower(coalesce(n.description, '')) CONTAINS $q
+              )
+            WITH n
+            LIMIT $limit
+            OPTIONAL MATCH (n)-[r]-(m)
+            RETURN n, m, r, startNode(r) as r_src, endNode(r) as r_dst
+            LIMIT $limit * 8
+            """,
+            q=q,
+            limit=limit,
+        )
+
+        nodes = {}
+        edges = {}
+        matches = {}
+
+        for rec in rows:
+            n = rec.get("n")
+            m = rec.get("m")
+
+            _add_node(nodes, n)
+            _add_node(nodes, m)
+            _add_edge(edges, rec.get("r"), rec.get("r_src"), rec.get("r_dst"))
+
+            if n is not None:
+                n_payload = _serialize_node(n)
+                if n_payload:
+                    matches[n_payload["id"]] = {
+                        "id": n_payload["id"],
+                        "type": n_payload["type"],
+                        "key": n_payload["key"],
+                        "label": n_payload["label"],
+                        "context": _match_context(n_payload["type"], n_payload.get("properties", {})),
+                    }
+
+        matched_values = list(matches.values())
+        type_counts = {}
+        for item in matched_values:
+            t = item.get("type", "Unknown")
+            type_counts[t] = type_counts.get(t, 0) + 1
+
+        dominant = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        dominant_text = ", ".join([f"{k} ({v})" for k, v in dominant]) if dominant else "no dominant type"
+
+        summary = (
+            f"Found {len(matched_values)} relevant entities and {len(edges)} relationships for '{query}'. "
+            f"Most matches: {dominant_text}."
+            if matched_values
+            else f"No graph entities matched '{query}'. Try technique IDs, attack names, user names, or playbook IDs."
+        )
+
+        insights = []
+        if matched_values:
+            top_windows = [m for m in matched_values if m.get("type") == "Window"]
+            top_patterns = [m for m in matched_values if m.get("type") == "DetectionPattern"]
+            top_techniques = [m for m in matched_values if m.get("type") == "MITRETechnique"]
+            if top_windows:
+                insights.append(
+                    f"{len(top_windows)} suspicious windows matched. Inspect their linked patterns and playbooks first."
+                )
+            if top_patterns:
+                insights.append(
+                    f"{len(top_patterns)} detection patterns matched. Validate thresholds and false-positive sources."
+                )
+            if top_techniques:
+                ids = ", ".join([x.get("key", "") for x in top_techniques[:4]])
+                insights.append(f"Mapped ATT&CK techniques include: {ids}.")
+            insights.append("Click a matched node to open analyst guidance and route trace in the side panel.")
+
+        return {
+            "summary": summary,
+            "insights": insights,
+            "matches": matched_values[:12],
+            "nodes": list(nodes.values()),
+            "edges": list(edges.values()),
+        }
+    finally:
+        session.close()
+        driver.close()
 
 
 @router.post("/query", response_model=RAGQueryResponse)

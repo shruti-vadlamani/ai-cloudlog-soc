@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { apiUrl } from '../api';
 
 function RAGQueryView() {
   const [query, setQuery] = useState('');
@@ -15,7 +16,7 @@ function RAGQueryView() {
       setLoading(true);
       setError(null);
       
-      const response = await fetch('/api/rag/query', {
+      const response = await fetch(apiUrl('/api/rag/query'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

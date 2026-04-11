@@ -2,16 +2,17 @@ import React, { useState, useEffect } from 'react';
 import './index.css';
 import DashboardView from './components/DashboardView';
 import AlertsView from './components/AlertsView';
-import RAGQueryView from './components/RAGQueryView';
 import PipelineView from './components/PipelineView';
+import KnowledgeGraphView from './components/KnowledgeGraphView';
+import { apiUrl } from './api';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('pipeline');
   const [healthStatus, setHealthStatus] = useState('checking');
 
   useEffect(() => {
     // Check backend health
-    fetch('/health')
+    fetch(apiUrl('/health'))
       .then(res => res.json())
       .then(() => setHealthStatus('healthy'))
       .catch(() => setHealthStatus('error'));
@@ -19,14 +20,13 @@ function App() {
 
   const renderContent = () => {
     switch(activeTab) {
-      case 'dashboard':
-        return <DashboardView />;
-      case 'alerts':
-        return <AlertsView />;
-      case 'rag':
-        return <RAGQueryView />;
       case 'pipeline':
         return <PipelineView />;
+      case 'alerts':
+        return <AlertsView />;
+      case 'graph':
+        return <KnowledgeGraphView />;
+      case 'dashboard':
       default:
         return <DashboardView />;
     }
@@ -37,14 +37,14 @@ function App() {
       <header className="header">
         <div className="header-content">
           <h1>
-            🛡️ Cloud SOC Dashboard
-            <span className="header-badge">AI-Powered</span>
+            Cloud SOC Control Center
+            <span className="header-badge">Production</span>
           </h1>
           <div className="status-indicator">
             <div className="status-dot" style={{
               background: healthStatus === 'healthy' ? '#10b981' : '#ef4444'
             }}></div>
-            <span>{healthStatus === 'healthy' ? 'System Online' : 'Backend Offline'}</span>
+            <span>{healthStatus === 'healthy' ? 'Backend Connected' : 'Backend Offline'}</span>
           </div>
         </div>
       </header>
@@ -52,28 +52,28 @@ function App() {
       <nav className="nav-tabs">
         <div className="nav-tabs-inner">
           <button 
-            className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+            className={`nav-tab ${activeTab === 'pipeline' ? 'active' : ''}`}
+            onClick={() => setActiveTab('pipeline')}
           >
-            📊 Dashboard
+            Live Pipeline Status
           </button>
           <button 
             className={`nav-tab ${activeTab === 'alerts' ? 'active' : ''}`}
             onClick={() => setActiveTab('alerts')}
           >
-            🚨 Alerts
+            Alert Triage
           </button>
           <button 
-            className={`nav-tab ${activeTab === 'rag' ? 'active' : ''}`}
-            onClick={() => setActiveTab('rag')}
+            className={`nav-tab ${activeTab === 'graph' ? 'active' : ''}`}
+            onClick={() => setActiveTab('graph')}
           >
-            🔍 RAG Query
+            Knowledge Graph Explorer
           </button>
           <button 
-            className={`nav-tab ${activeTab === 'pipeline' ? 'active' : ''}`}
-            onClick={() => setActiveTab('pipeline')}
+            className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
           >
-            ⚙️ Pipeline
+            Security Overview
           </button>
         </div>
       </nav>

@@ -28,9 +28,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pandas as pd
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import pandas as pd
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -44,7 +45,7 @@ logging.basicConfig(
 log = logging.getLogger("incident_analyzer")
 
 OLLAMA_MODEL = "phi3.5:3.8b"
-CHROMA_PATH = str(PROJECT_ROOT / "chroma_db")
+CHROMA_PATH = os.getenv("CHROMA_PATH", str(PROJECT_ROOT / "chroma_db"))
 
 
 # ── LLM Handler ───────────────────────────────────────────────────────────────
@@ -168,6 +169,10 @@ def build_llm_prompt(payload: Dict) -> str:
     top_events = list(event_ctx.get("event_counts", {}).items())[:5]
     events_str = ", ".join([f"{e[0]}×{e[1]}" for e in top_events]) or "unavailable"
 
+    # Attack hint: include when available so the LLM can confirm or dispute
+    attack_hint = alert.get("attack_hint", "")
+    hint_str = f"\n  Analyst hint: prior labeling suggests '{attack_hint}'" if attack_hint else ""
+
     prompt = f"""You are a senior AWS cloud security analyst. Analyze this anomaly detection alert concisely.
 
 ALERT:
@@ -176,7 +181,7 @@ ALERT:
   Severity: {alert['severity']}
   Ensemble Score: {alert['ensemble_score']} (1.0 = most anomalous)
   Models Fired: {', '.join(alert['models_fired']) or 'none'}
-  Vote Count: {alert['vote_count']}/3
+  Vote Count: {alert['vote_count']}/3{hint_str}
 
 BEHAVIORAL SIGNALS:
   Key anomalies: {signals_str}
@@ -193,8 +198,11 @@ DETECTION PATTERNS MATCHED:
 {chain_str}
 {similar_str}
 
-Provide a concise security analysis with:
-1. Most likely attack classification and reasoning (2-3 sentences)
+You MUST begin your response with this exact line:
+ATTACK CLASSIFICATION: <one of: privilege_escalation | data_exfiltration | insider_threat | reconnaissance | backdoor_creation | unknown>
+
+Then provide:
+1. Reasoning for your classification (2-3 sentences, cite specific MITRE technique IDs)
 2. Top 3 immediate actions for the analyst
 3. Key investigation questions to confirm or rule out false positive
 4. Risk if unaddressed (1 sentence)
@@ -282,14 +290,17 @@ def main():
     from neo4j import GraphDatabase
     from sentence_transformers import SentenceTransformer
 
-    neo4j_uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_pass = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    neo4j_cfg = get_neo4j_config(require_credentials=True)
+    neo4j_uri = neo4j_cfg["uri"]
+    neo4j_user = neo4j_cfg["username"]
+    neo4j_pass = neo4j_cfg["password"]
+    neo4j_db = neo4j_cfg.get("database")
 
     log.info("Connecting to Neo4j...")
     try:
         driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_pass))
-        with driver.session() as s:
+        session_kwargs = {"database": neo4j_db} if neo4j_db else {}
+        with driver.session(**session_kwargs) as s:
             count = s.run("MATCH (n) RETURN count(n) as c").single()["c"]
         log.info(f"✅ Neo4j: {count} nodes")
     except Exception as e:
@@ -311,7 +322,7 @@ def main():
     log.info("✅ Embedder ready")
 
     llm = LLMHandler()
-    enricher = AlertEnricher(driver, chroma_client, embedder)
+    enricher = AlertEnricher(driver, chroma_client, embedder, neo4j_database=neo4j_db)
 
     # ── Load data ─────────────────────────────────────────────────────────────
     log.info("Loading feature matrix and normalized events...")
@@ -334,6 +345,13 @@ def main():
 
         # Enrich with RAG
         payload = enricher.enrich(row, feature_df, normalized_df)
+
+        # Expose attack_name as a hint in the alert dict so the prompt can
+        # include it — this is ground-truth metadata, useful for evaluation
+        # and for the LLM to confirm or dispute the ML model's implied label.
+        attack_hint = str(row.get("attack_name", "")).strip()
+        if attack_hint and attack_hint.lower() not in ("nan", "none", ""):
+            payload["alert"]["attack_hint"] = attack_hint
 
         # Generate LLM analysis
         prompt = build_llm_prompt(payload)

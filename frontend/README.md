@@ -73,6 +73,18 @@ npm run build
 
 This creates an optimized production build in the `build/` folder.
 
+### Deployment Configuration
+
+For local development, keep `REACT_APP_API_BASE_URL` empty and use proxy.
+
+For deployed frontend/backend (different domains), set:
+
+```bash
+REACT_APP_API_BASE_URL=https://your-backend-domain.com
+```
+
+The frontend will call `https://your-backend-domain.com/api/...` directly.
+
 ## API Integration
 
 The frontend communicates with the FastAPI backend through these endpoints:

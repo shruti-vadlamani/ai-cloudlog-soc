@@ -24,9 +24,10 @@ import os
 import sys
 from pathlib import Path
 
-from neo4j import GraphDatabase
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from neo4j import GraphDatabase
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,13 +41,19 @@ KB_DIR = PROJECT_ROOT / "knowledge_base"
 
 
 class KnowledgeGraphIngester:
-    def __init__(self, uri="neo4j://127.0.0.1:7687", user="neo4j", password="neo4j1234"):
+    def __init__(self, uri, user, password, database=None):
+        self.database = database
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
+
+    def _session(self):
+        if self.database:
+            return self.driver.session(database=self.database)
+        return self.driver.session()
 
     def clear_knowledge_graph(self):
         """Clear only knowledge base nodes (not the event graph)."""
         log.info("Clearing knowledge base nodes...")
-        with self.driver.session() as s:
+        with self._session() as s:
             s.run("MATCH (n:MITRETechnique) DETACH DELETE n")
             s.run("MATCH (n:DetectionPattern) DETACH DELETE n")
             s.run("MATCH (n:Playbook) DETACH DELETE n")
@@ -56,7 +63,7 @@ class KnowledgeGraphIngester:
     def create_indexes(self):
         """Create indexes for query performance."""
         log.info("Creating indexes...")
-        with self.driver.session() as s:
+        with self._session() as s:
             s.run("CREATE INDEX IF NOT EXISTS FOR (t:MITRETechnique) ON (t.technique_id)")
             s.run("CREATE INDEX IF NOT EXISTS FOR (d:DetectionPattern) ON (d.id)")
             s.run("CREATE INDEX IF NOT EXISTS FOR (p:Playbook) ON (p.id)")
@@ -74,7 +81,7 @@ class KnowledgeGraphIngester:
             techniques = json.load(f)
 
         count = 0
-        with self.driver.session() as s:
+        with self._session() as s:
             for tech in techniques:
                 tech_id = tech.get("technique_id", "")
                 if not tech_id:
@@ -106,7 +113,7 @@ class KnowledgeGraphIngester:
             services = json.load(f)
 
         count = 0
-        with self.driver.session() as s:
+        with self._session() as s:
             for svc in services:
                 svc_name = svc.get("service_name", "")
                 if not svc_name:
@@ -144,7 +151,7 @@ class KnowledgeGraphIngester:
             patterns = json.load(f)
 
         count = 0
-        with self.driver.session() as s:
+        with self._session() as s:
             for det in patterns:
                 pattern_id = det.get("pattern_id", "")
                 if not pattern_id:
@@ -200,7 +207,7 @@ class KnowledgeGraphIngester:
             playbooks = json.load(f)
 
         count = 0
-        with self.driver.session() as s:
+        with self._session() as s:
             for pb in playbooks:
                 pb_id = pb.get("playbook_id", "")
                 if not pb_id:
@@ -265,7 +272,7 @@ class KnowledgeGraphIngester:
         rel_counts = {}
         skipped = 0
 
-        with self.driver.session() as s:
+        with self._session() as s:
             for rel in relations:
                 src_entity = rel.get("source_entity", "")
                 src_type = rel.get("source_type", "")
@@ -364,14 +371,16 @@ class KnowledgeGraphIngester:
 
 
 def main():
-    uri = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
-    user = os.getenv("NEO4J_USER", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD", "neo4j1234")
+    cfg = get_neo4j_config(require_credentials=True)
+    uri = cfg["uri"]
+    user = cfg["username"]
+    password = cfg["password"]
+    database = cfg.get("database")
 
-    ingester = KnowledgeGraphIngester(uri, user, password)
+    ingester = KnowledgeGraphIngester(uri, user, password, database)
 
     # Verify connection
-    with ingester.driver.session() as s:
+    with ingester._session() as s:
         count = s.run("MATCH (n) RETURN count(n) as c").single()["c"]
         log.info(f"✅ Neo4j connected: {count} existing nodes")
 
@@ -390,7 +399,7 @@ def main():
     ingester.ingest_event_graph()
 
     # Verify
-    with ingester.driver.session() as s:
+    with ingester._session() as s:
         result = s.run("""
             MATCH (n)
             RETURN labels(n)[0] as label, count(n) as count

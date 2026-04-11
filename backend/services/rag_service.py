@@ -6,14 +6,16 @@ Service layer for RAG queries and alert enrichment
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-import pandas as pd
-
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+import pandas as pd
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 from backend.models.schemas import (
     EnrichedAlert,
@@ -43,7 +45,7 @@ class RAGService:
             import chromadb
             from sentence_transformers import SentenceTransformer
 
-            chroma_path = str(PROJECT_ROOT / "chroma_db")
+            chroma_path = os.getenv("CHROMA_PATH", str(PROJECT_ROOT / "chroma_db"))
             self.chroma_client = chromadb.PersistentClient(path=chroma_path)
             self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
             log.info("ChromaDB initialized")
@@ -57,14 +59,18 @@ class RAGService:
             from neo4j import GraphDatabase
             from rag_ingestion.alert_enrichment import AlertEnricher
 
-            # Try to connect to Neo4j
-            uri = "bolt://localhost:7687"
-            auth = ("neo4j", "password")  # Default, should be in config
+            neo4j_cfg = get_neo4j_config(require_credentials=True)
+            uri = neo4j_cfg["uri"]
+            auth = (neo4j_cfg["username"], neo4j_cfg["password"])
+            neo4j_db = neo4j_cfg.get("database")
             self.neo4j_driver = GraphDatabase.driver(uri, auth=auth)
             
             if self.chroma_client and self.embedder:
                 self.alert_enricher = AlertEnricher(
-                    self.neo4j_driver, self.chroma_client, self.embedder
+                    self.neo4j_driver,
+                    self.chroma_client,
+                    self.embedder,
+                    neo4j_database=neo4j_db,
                 )
                 log.info("Alert enricher initialized with Neo4j")
         except ImportError:
@@ -275,7 +281,7 @@ class RAGService:
             return []
 
         try:
-            with open(playbook_path, "r") as f:
+            with open(playbook_path, "r", encoding="utf-8") as f:
                 playbooks = json.load(f)
             return playbooks
         except Exception as e:
@@ -290,7 +296,7 @@ class RAGService:
             return []
 
         try:
-            with open(technique_path, "r") as f:
+            with open(technique_path, "r", encoding="utf-8") as f:
                 techniques = json.load(f)
             return techniques
         except Exception as e:

@@ -7,12 +7,14 @@
     "axios": "^1.13.6",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.576.0",
+    "neovis.js": "^2.1.0",
     "postcss": "^8.5.8",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-scripts": "5.0.1",
     "recharts": "^3.7.0",
-    "tailwindcss": "^4.2.1"
+    "tailwindcss": "^4.2.1",
+    "vis-network": "^10.0.2"
   },
   "scripts": {
     "start": "react-scripts start",

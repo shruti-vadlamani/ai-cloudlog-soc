@@ -216,6 +216,14 @@ app.add_middleware(
 )
 ```
 
+Production shortcut via environment variable:
+
+```bash
+CORS_ORIGINS=https://your-frontend-domain.com,https://www.your-frontend-domain.com
+```
+
+When set, `CORS_ORIGINS` overrides `backend/config.yaml` origins.
+
 ## Optional Services
 
 - **Neo4j** (for graph-based pattern matching): localhost:7687

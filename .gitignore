@@ -37,7 +37,9 @@ wheels/
 *.db
 
 # ChromaDB
-chroma_db/
+!chroma_db/
+!chroma_db/**
+!chroma_db/*.sqlite3
 
 # Environment variables
 .env
@@ -63,6 +65,7 @@ data/features/
 # Node.js (Frontend)
 node_modules/
 package-lock.json
+frontend/build/
 
 # Generated reports
 incident_report_*.txt

@@ -33,10 +33,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
 from neo4j import GraphDatabase
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from rag_ingestion.neo4j_env import get_neo4j_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +52,8 @@ FEATURE_MATRIX_CSVGZ = PROJECT_ROOT / "data" / "features" / "feature_matrix.csv.
 ENSEMBLE_SCORES_CSV = PROJECT_ROOT / "data" / "models" / "ensemble_scores.csv"
 
 BATCH_SIZE = 200
+MATCH_SCORE_THRESHOLD = float(os.getenv("GRAPH_BRIDGE_MATCH_THRESHOLD", "0.5"))
+MIN_INDICATOR_HITS = int(os.getenv("GRAPH_BRIDGE_MIN_HITS", "1"))
 
 
 class GraphBridge:
@@ -65,11 +68,18 @@ class GraphBridge:
         user: str = None,
         password: str = None
     ):
-        self.uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.user = user or os.getenv("NEO4J_USER", "neo4j")
-        self.password = password or os.getenv("NEO4J_PASSWORD", "neo4j1234")
+        cfg = get_neo4j_config(require_credentials=True)
+        self.uri = uri or cfg["uri"]
+        self.user = user or cfg["username"]
+        self.password = password or cfg["password"]
+        self.database = cfg.get("database")
         self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
         log.info(f"Connected to Neo4j at {self.uri}")
+
+    def _session(self):
+        if self.database:
+            return self.driver.session(database=self.database)
+        return self.driver.session()
 
     def close(self):
         self.driver.close()
@@ -117,7 +127,7 @@ class GraphBridge:
         log.info(f"Loaded {len(feature_df)} windows from feature matrix")
 
         # Create constraint for Window nodes
-        with self.driver.session() as s:
+        with self._session() as s:
             s.run("CREATE CONSTRAINT IF NOT EXISTS FOR (w:Window) REQUIRE w.window_id IS UNIQUE")
 
         # Batch ingest Window nodes
@@ -127,7 +137,7 @@ class GraphBridge:
 
         for i in range(0, total, BATCH_SIZE):
             batch = records[i : i + BATCH_SIZE]
-            with self.driver.session() as s:
+            with self._session() as s:
                 result = s.execute_write(self._write_window_batch, batch)
                 created_count += result
 
@@ -189,6 +199,11 @@ class GraphBridge:
                 "iam_write_events_zscore": float(row.get("iam_write_events_zscore", 0)),
                 "s3_delete_events_zscore": float(row.get("s3_delete_events_zscore", 0)),
                 "s3_get_slope_3d": float(row.get("s3_get_slope_3d", 0)),
+                "iam_events": float(row.get("iam_events", 0)),
+                "iam_write_ratio": float(row.get("iam_write_ratio", 0)),
+                "error_events": float(row.get("error_events", 0)),
+                "error_rate": float(row.get("error_rate", 0)),
+                "bytes_out_total": float(row.get("bytes_out_total", 0)),
                 "window_is_business_hours": bool(row.get("window_is_business_hours", True)),
                 "window_is_weekend": bool(row.get("window_is_weekend", False)),
                 "ensemble_score": float(row.get("ensemble_score", 0.0)),
@@ -245,7 +260,7 @@ class GraphBridge:
         """
         log.info("Step 2: Creating MATCHES_PATTERN edges (Event → DetectionPattern)...")
 
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (e:Event), (d:DetectionPattern)
                 WHERE e.eventName IN d.cloudtrail_events
@@ -265,12 +280,18 @@ class GraphBridge:
         based on behavioral_indicators threshold matching.
 
         This compares Window feature values against DetectionPattern thresholds.
-        Only creates edge if match_score >= 0.5 (at least half indicators match).
+        Creates an edge when score/hit thresholds are met. Thresholds are configurable via
+        env vars GRAPH_BRIDGE_MATCH_THRESHOLD and GRAPH_BRIDGE_MIN_HITS.
 
         Returns:
             Number of TRIGGERS_INDICATOR edges created
         """
         log.info("Step 3: Creating TRIGGERS_INDICATOR edges (Window → DetectionPattern)...")
+
+        # Rebuild edge set to avoid stale/duplicate match_score values from prior runs.
+        with self._session() as s:
+            s.run("MATCH ()-[r:TRIGGERS_INDICATOR]->() DELETE r")
+        log.info("Cleared existing TRIGGERS_INDICATOR edges")
 
         # Load all DetectionPattern nodes with behavioral_indicators
         patterns = self._load_detection_patterns()
@@ -295,7 +316,7 @@ class GraphBridge:
                 match_score, matched_features = self._compute_match_score(
                     window_features, pattern_indicators
                 )
-                if match_score >= 0.5:
+                if match_score >= MATCH_SCORE_THRESHOLD and len(matched_features) >= MIN_INDICATOR_HITS:
                     edges.append({
                         "window_id": window_id,
                         "pattern_id": pattern_id,
@@ -303,7 +324,10 @@ class GraphBridge:
                         "matched_features": matched_features,
                     })
 
-        log.info(f"Computed {len(edges)} Window-Pattern matches (score >= 0.5)")
+        log.info(
+            f"Computed {len(edges)} Window-Pattern matches "
+            f"(score>={MATCH_SCORE_THRESHOLD}, hits>={MIN_INDICATOR_HITS})"
+        )
 
         # Batch write edges
         total = len(edges)
@@ -311,7 +335,7 @@ class GraphBridge:
 
         for i in range(0, total, BATCH_SIZE):
             batch = edges[i : i + BATCH_SIZE]
-            with self.driver.session() as s:
+            with self._session() as s:
                 result = s.execute_write(self._write_triggers_indicator_batch, batch)
                 created_count += result
 
@@ -324,7 +348,7 @@ class GraphBridge:
     def _load_detection_patterns(self) -> Dict[str, Dict]:
         """Load all DetectionPattern nodes with behavioral_indicators."""
         patterns = {}
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (d:DetectionPattern)
                 WHERE d.behavioral_indicators IS NOT NULL
@@ -342,7 +366,7 @@ class GraphBridge:
     def _load_window_features(self) -> Dict[str, Dict]:
         """Load all Window nodes with feature values."""
         windows = {}
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (w:Window)
                 RETURN w.window_id as window_id,
@@ -360,7 +384,12 @@ class GraphBridge:
                        w.iam_list_events_zscore as iam_list_events_zscore,
                        w.iam_write_events_zscore as iam_write_events_zscore,
                        w.s3_delete_events_zscore as s3_delete_events_zscore,
-                       w.s3_get_slope_3d as s3_get_slope_3d
+                       w.s3_get_slope_3d as s3_get_slope_3d,
+                       w.iam_events as iam_events,
+                       w.iam_write_ratio as iam_write_ratio,
+                       w.error_events as error_events,
+                       w.error_rate as error_rate,
+                       w.bytes_out_total as bytes_out_total
             """)
             for rec in result:
                 window_id = rec["window_id"]
@@ -380,6 +409,11 @@ class GraphBridge:
                     "iam_write_events_zscore": rec.get("iam_write_events_zscore", 0),
                     "s3_delete_events_zscore": rec.get("s3_delete_events_zscore", 0),
                     "s3_get_slope_3d": rec.get("s3_get_slope_3d", 0),
+                    "iam_events": rec.get("iam_events", 0),
+                    "iam_write_ratio": rec.get("iam_write_ratio", 0),
+                    "error_events": rec.get("error_events", 0),
+                    "error_rate": rec.get("error_rate", 0),
+                    "bytes_out_total": rec.get("bytes_out_total", 0),
                 }
         return windows
 
@@ -401,12 +435,13 @@ class GraphBridge:
 
         hits = 0
         matched_features = []
-        total = len(pattern_indicators)
+        comparable = 0
 
         for feature_name, threshold_def in pattern_indicators.items():
             actual_value = window_features.get(feature_name)
             if actual_value is None:
                 continue
+            comparable += 1
 
             threshold = threshold_def.get("threshold", 0)
             direction = threshold_def.get("direction", "above")
@@ -418,7 +453,7 @@ class GraphBridge:
                 hits += 1
                 matched_features.append(feature_name)
 
-        match_score = hits / total if total > 0 else 0.0
+        match_score = hits / comparable if comparable > 0 else 0.0
         return match_score, matched_features
 
     @staticmethod
@@ -428,10 +463,9 @@ class GraphBridge:
         UNWIND $edges AS e
         MATCH (w:Window {window_id: e.window_id})
         MATCH (d:DetectionPattern {id: e.pattern_id})
-        MERGE (w)-[:TRIGGERS_INDICATOR {
-            match_score: e.match_score,
-            matched_features: e.matched_features
-        }]->(d)
+        MERGE (w)-[r:TRIGGERS_INDICATOR]->(d)
+        SET r.match_score = e.match_score,
+            r.matched_features = e.matched_features
         """
         result = tx.run(cypher, edges=batch)
         summary = result.consume()
@@ -449,7 +483,7 @@ class GraphBridge:
         """
         log.info("Step 4: Creating ANOMALOUS_FOR edges (Window → User for anomalies)...")
 
-        with self.driver.session() as s:
+        with self._session() as s:
             result = s.run("""
                 MATCH (u:User)-[:HAD_WINDOW]->(w:Window)
                 WHERE w.ensemble_pred = 1
@@ -471,7 +505,7 @@ class GraphBridge:
         log.info("BRIDGE GRAPH VERIFICATION")
         log.info("=" * 70)
 
-        with self.driver.session() as s:
+        with self._session() as s:
             # Count nodes and edges
             window_count = s.run("MATCH (w:Window) RETURN count(w) as cnt").single()["cnt"]
             matches_pattern_count = s.run(
