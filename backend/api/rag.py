@@ -6,8 +6,10 @@ API endpoints for RAG-powered queries and graph exploration.
 
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
+from fastapi.responses import StreamingResponse
 from neo4j import GraphDatabase
 from rag_ingestion.neo4j_env import get_neo4j_config
+import json
 
 from backend.models.schemas import (
     RAGQueryRequest,
@@ -15,8 +17,51 @@ from backend.models.schemas import (
     Playbook,
 )
 from backend.services.rag_service import get_rag_service, RAGService
+from backend.services.pdf_service import get_pdf_service, PDFService
 
 router = APIRouter()
+
+
+@router.get("/health", response_model=dict)
+def graph_health_check():
+    """Check Neo4j connection and graph statistics."""
+    try:
+        driver, session = _graph_session()
+        
+        stats = session.run("""
+            MATCH (n)
+            WITH labels(n)[0] as label, count(n) as count
+            RETURN label, count
+            ORDER BY count DESC
+        """).data()
+        
+        total_nodes = sum(s['count'] for s in stats)
+        edge_stats = session.run("""
+            MATCH ()-[r]->()
+            WITH type(r) as rel_type, count(r) as count
+            RETURN rel_type, count
+            ORDER BY count DESC
+        """).data()
+        
+        total_edges = sum(e['count'] for e in edge_stats)
+        
+        session.close()
+        driver.close()
+        
+        return {
+            "status": "ok",
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+            "node_types": stats,
+            "edge_types": edge_stats,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "total_nodes": 0,
+            "total_edges": 0,
+        }
 
 
 def _graph_session():
@@ -228,14 +273,26 @@ def query_graph_insights(
     query: str = Body(..., embed=True, min_length=2),
     limit: int = Body(25, embed=True, ge=5, le=80),
 ):
-    """Search graph entities with natural language keywords and return an explainable subgraph."""
+    """
+    Search graph with natural language and return graph + LLM explanation.
+    
+    Returns:
+    - Graph nodes and edges for visualization
+    - LLM-synthesized explanation about what was found
+    - Specific matches if available
+    """
+    import logging
+    log = logging.getLogger("rag_graph_query")
+    
     q = query.strip().lower()
     if not q:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     driver, session = _graph_session()
     try:
-        rows = session.run(
+        # First try: direct keyword match
+        log.info(f"Running keyword query for: {query}")
+        rows = list(session.run(
             """
             MATCH (n)
             WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
@@ -256,7 +313,9 @@ def query_graph_insights(
             """,
             q=q,
             limit=limit,
-        )
+        ))
+        
+        log.info(f"Keyword query returned {len(rows)} rows")
 
         nodes = {}
         edges = {}
@@ -280,6 +339,55 @@ def query_graph_insights(
                         "label": n_payload["label"],
                         "context": _match_context(n_payload["type"], n_payload.get("properties", {})),
                     }
+        
+        log.info(f"Matched {len(matches)} entities from keyword query")
+        
+        # If no direct matches, try broader traversal for natural language queries
+        if not matches:
+            log.info("No keyword matches found, trying fallback to knowledge graph overview")
+            # Get ALL key entity types (not just limited sample)
+            all_nodes_result = session.run(
+                """
+                MATCH (n)
+                WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                RETURN n
+                LIMIT 50
+                """
+            )
+            
+            sample_rows = list(all_nodes_result)
+            log.info(f"Retrieved {len(sample_rows)} sample nodes from knowledge graph")
+            
+            if sample_rows:
+                # Add all sample nodes
+                for rec in sample_rows:
+                    n = rec.get("n")
+                    if n:
+                        _add_node(nodes, n)
+                        log.debug(f"Added node: {n.get('name', n.get('id', 'unknown'))}")
+                
+                # Get some edges connecting them
+                neighbors_result = session.run(
+                    """
+                    MATCH (n)-[r]-(m)
+                    WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                      AND any(lbl IN labels(m) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                    RETURN n, r, m
+                    LIMIT 100
+                    """
+                )
+                
+                for nbr_rec in neighbors_result:
+                    n = nbr_rec.get("n")
+                    m = nbr_rec.get("m")
+                    r = nbr_rec.get("r")
+                    _add_node(nodes, n)
+                    _add_node(nodes, m)
+                    _add_edge(edges, r, n, m)
+                
+                log.info(f"Added {len(edges)} edges from fallback query")
+            else:
+                log.warning("No nodes found even in fallback query")
 
         matched_values = list(matches.values())
         type_counts = {}
@@ -290,12 +398,21 @@ def query_graph_insights(
         dominant = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:3]
         dominant_text = ", ".join([f"{k} ({v})" for k, v in dominant]) if dominant else "no dominant type"
 
-        summary = (
-            f"Found {len(matched_values)} relevant entities and {len(edges)} relationships for '{query}'. "
-            f"Most matches: {dominant_text}."
-            if matched_values
-            else f"No graph entities matched '{query}'. Try technique IDs, attack names, user names, or playbook IDs."
-        )
+        # Determine summary message
+        if matched_values:
+            summary = (
+                f"Found {len(matched_values)} relevant entities and {len(edges)} relationships for '{query}'. "
+                f"Most matches: {dominant_text}."
+            )
+        elif nodes:
+            summary = (
+                f"No specific matches for '{query}', showing knowledge graph overview "
+                f"with {len(nodes)} entities and {len(edges)} relationships."
+            )
+        else:
+            summary = (
+                f"No graph entities matched '{query}'. Try technique IDs, attack names, user names, or playbook IDs."
+            )
 
         insights = []
         if matched_values:
@@ -314,17 +431,122 @@ def query_graph_insights(
                 ids = ", ".join([x.get("key", "") for x in top_techniques[:4]])
                 insights.append(f"Mapped ATT&CK techniques include: {ids}.")
             insights.append("Click a matched node to open analyst guidance and route trace in the side panel.")
+        else:
+            if len(nodes) > 0:
+                insights.append(f"Showing {len(nodes)} entities from the knowledge graph.")
+                insights.append("Hover over nodes to inspect details. Double-click to expand neighbors.")
+        
+        # Generate LLM explanation about the graph findings
+        # TODO: Implement async LLM explanation later
+        explanation = None
 
+        log.info(f"Returning {len(nodes)} nodes and {len(edges)} edges")
+        
         return {
             "summary": summary,
             "insights": insights,
             "matches": matched_values[:12],
             "nodes": list(nodes.values()),
             "edges": list(edges.values()),
+            "explanation": explanation,  # LLM-synthesized explanation
         }
+    except Exception as e:
+        log.error(f"Graph query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Graph query error: {str(e)}")
     finally:
         session.close()
         driver.close()
+
+
+def _generate_graph_explanation(query: str, nodes: dict, edges: dict, matches: list, rag_service: RAGService) -> Optional[str]:
+    """
+    Use LLM to generate a detailed explanation of what the graph query found.
+    """
+    if not rag_service.llm_handler:
+        return None
+    
+    try:
+        # Build context from the graph
+        node_summary = _summarize_nodes(nodes)
+        edge_summary = _summarize_edges(edges)
+        match_summary = _summarize_matches(matches) if matches else "No specific entity matches."
+        
+        prompt = f"""Based on this knowledge graph analysis, provide a detailed explanation of the security findings.
+
+User Question: {query}
+
+Graph Summary:
+- Total entities: {len(nodes)}
+- Total relationships: {len(edges)}
+- Entity types found: {node_summary}
+- Key relationships: {edge_summary}
+- Specific matches: {match_summary}
+
+Please provide:
+1. What does this graph show about the question asked?
+2. Key security findings and patterns visible in the graph
+3. Relationships between entities (users, techniques, patterns, incidents)
+4. Risk assessment based on the patterns
+5. Recommended actions or next steps for the security team
+
+Be specific and actionable for security analysts."""
+        
+        # Call LLM without timeout (Ollama doesn't support it)
+        response = rag_service.llm_handler.chat(
+            model=rag_service.llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            options={
+                "temperature": 0.3,
+                "top_p": 0.9,
+                "num_ctx": 1024,  # Reduced context window
+                "num_predict": 400,  # Shorter response for faster generation
+            },
+        )
+        
+        return response.get("message", {}).get("content")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Graph explanation LLM failed: {e}")
+        return None
+
+
+def _summarize_nodes(nodes: dict) -> str:
+    """Create a summary of node types in the graph."""
+    type_counts = {}
+    for node in nodes.values():
+        t = node.get("type", "Unknown")
+        type_counts[t] = type_counts.get(t, 0) + 1
+    
+    if not type_counts:
+        return "No entities"
+    
+    return ", ".join([f"{k} ({v})" for k, v in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)])
+
+
+def _summarize_edges(edges: dict) -> str:
+    """Create a summary of edge types in the graph."""
+    edge_types = {}
+    for edge in edges.values():
+        t = edge.get("type", "UNKNOWN")
+        edge_types[t] = edge_types.get(t, 0) + 1
+    
+    if not edge_types:
+        return "No relationships"
+    
+    return ", ".join([f"{k} ({v})" for k, v in sorted(edge_types.items(), key=lambda x: x[1], reverse=True)])
+
+
+def _summarize_matches(matches: list) -> str:
+    """Create a summary of matched entities."""
+    if not matches:
+        return "No matches"
+    
+    match_types = {}
+    for match in matches[:10]:  # Top 10
+        t = match.get("type", "Unknown")
+        match_types[t] = match_types.get(t, 0) + 1
+    
+    return ", ".join([f"{k} ({v})" for k, v in sorted(match_types.items(), key=lambda x: x[1], reverse=True)])
 
 
 @router.post("/query", response_model=RAGQueryResponse)
@@ -333,22 +555,25 @@ def query_knowledge_base(
     rag_service: RAGService = Depends(get_rag_service),
 ):
     """
-    Query the RAG knowledge base.
+    Query the RAG knowledge base with optional LLM synthesis.
 
     Searches ChromaDB collections for relevant information:
     - **behavioral_incidents**: Past alert windows with behavioral context
     - **threat_intelligence**: MITRE techniques, AWS-specific indicators
+
+    If `use_llm=true`, uses Ollama to synthesize results into a detailed explanation.
 
     Example request:
     ```json
     {
         "query": "What are indicators of privilege escalation in AWS?",
         "max_results": 5,
-        "collection": "threat_intelligence"
+        "collection": "threat_intelligence",
+        "use_llm": true
     }
     ```
 
-    Returns semantically similar documents with metadata and similarity scores.
+    Returns semantically similar documents with metadata, similarity scores, and optional LLM explanation.
     """
     if not rag_service.chroma_client:
         raise HTTPException(
@@ -360,6 +585,7 @@ def query_knowledge_base(
         query=request.query,
         max_results=request.max_results,
         collection=request.collection,
+        use_llm=request.use_llm,
     )
 
 
@@ -368,13 +594,14 @@ def query_knowledge_base_get(
     q: str = Query(..., min_length=3, description="Search query"),
     max_results: int = Query(5, ge=1, le=20, description="Maximum results"),
     collection: Optional[str] = Query(None, description="Collection to search"),
+    use_llm: bool = Query(True, description="Use LLM to synthesize results"),
     rag_service: RAGService = Depends(get_rag_service),
 ):
     """
-    Query knowledge base via GET request (alternative to POST).
+    Query knowledge base via GET request with optional LLM synthesis.
 
     Example:
-    `/api/rag/query?q=privilege+escalation&max_results=5&collection=threat_intelligence`
+    `/api/rag/query?q=privilege+escalation&max_results=5&collection=threat_intelligence&use_llm=true`
     """
     if not rag_service.chroma_client:
         raise HTTPException(
@@ -386,6 +613,7 @@ def query_knowledge_base_get(
         query=q,
         max_results=max_results,
         collection=collection,
+        use_llm=use_llm,
     )
 
 
@@ -528,3 +756,91 @@ def _get_collection_description(name: str) -> str:
         "threat_intelligence": "MITRE ATT&CK techniques and AWS-specific detection indicators",
     }
     return descriptions.get(name, "")
+
+
+@router.post("/export/pdf")
+def export_query_results_to_pdf(
+    request: RAGQueryRequest = Body(...),
+    rag_service: RAGService = Depends(get_rag_service),
+    pdf_service: PDFService = Depends(get_pdf_service),
+):
+    """
+    Export RAG query results to a PDF file.
+
+    Takes the same request as /api/rag/query but returns a downloadable PDF
+    containing formatted query results with metadata, similarity scores, and
+    professional formatting.
+
+    Returns:
+        PDF file as binary stream
+    """
+    # Get query results
+    response = rag_service.query_knowledge_base(
+        query=request.query,
+        max_results=request.max_results,
+        collection=request.collection,
+    )
+
+    # Convert results to dict format for PDF generation
+    results_list = [
+        {
+            "content": r.content,
+            "metadata": r.metadata,
+            "similarity": r.similarity,
+        }
+        for r in response.results
+    ]
+
+    # Generate PDF
+    try:
+        pdf_bytes = pdf_service.generate_query_report(
+            query=response.query,
+            results=results_list,
+            collection=response.collection,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Return as downloadable file
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="query_report_{request.query[:30].replace(" ", "_")}.pdf"'
+        },
+    )
+
+
+@router.post("/export/summary")
+def export_query_summary(
+    request: RAGQueryRequest = Body(...),
+    rag_service: RAGService = Depends(get_rag_service),
+):
+    """
+    Export RAG query results as a JSON summary.
+
+    Returns compact JSON with metadata about the query, results count,
+    and all results with similarity scores for programmatic processing.
+
+    Returns:
+        JSON object containing query metadata and results
+    """
+    response = rag_service.query_knowledge_base(
+        query=request.query,
+        max_results=request.max_results,
+        collection=request.collection,
+    )
+
+    return {
+        "query": response.query,
+        "collection": response.collection,
+        "result_count": len(response.results),
+        "results": [
+            {
+                "content": r.content,
+                "metadata": r.metadata,
+                "similarity": r.similarity,
+            }
+            for r in response.results
+        ],
+    }

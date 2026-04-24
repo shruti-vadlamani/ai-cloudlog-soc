@@ -37,8 +37,9 @@ class RAGService:
         self.neo4j_driver = None
         self.alert_enricher = None
         self.embedder = None
+        self.llm_handler = None
         self._init_rag()
-
+    
     def _init_rag(self):
         """Initialize RAG components (ChromaDB, Neo4j, AlertEnricher)"""
         try:
@@ -84,14 +85,16 @@ class RAGService:
         query: str,
         max_results: int = 5,
         collection: Optional[str] = None,
+        use_llm: bool = True,
     ) -> RAGQueryResponse:
         """
-        Query ChromaDB for relevant knowledge.
+        Query ChromaDB for relevant knowledge and optionally synthesize with LLM.
 
         Args:
             query: Natural language query
             max_results: Number of results to return
             collection: Specific collection to query (behavioral_incidents, threat_intelligence)
+            use_llm: Whether to use LLM to generate synthesis/explanation
         """
         if not self.chroma_client or not self.embedder:
             return RAGQueryResponse(
@@ -145,12 +148,64 @@ class RAGService:
         # Sort by similarity and limit
         results.sort(key=lambda x: x.similarity, reverse=True)
         results = results[:max_results]
+        
+        # Generate LLM explanation if available and requested
+        explanation = None
+        if use_llm and results and self.llm_handler:
+            explanation = self._generate_explanation(query, results)
 
         return RAGQueryResponse(
             query=query,
             results=results,
             collection=collection or "all",
+            explanation=explanation,
         )
+    
+    def _generate_explanation(self, query: str, results: List[RAGQueryResult]) -> Optional[str]:
+        """
+        Use LLM to synthesize query results into a detailed explanation.
+        """
+        if not self.llm_handler:
+            return None
+        
+        try:
+            # Build context from results
+            context_parts = []
+            for i, result in enumerate(results[:3], 1):  # Use top 3 results
+                context_parts.append(f"[{i}] {result.content[:300]}")
+            
+            context = "\n\n".join(context_parts)
+            
+            prompt = f"""Based on the following security knowledge and past incidents, provide a detailed, actionable answer to the user's question.
+
+User Question: {query}
+
+Relevant Knowledge:
+{context}
+
+Please provide:
+1. Direct answer to the question
+2. Key indicators or patterns mentioned
+3. Recommended actions or next steps
+4. Any relevant security best practices
+
+Keep the response focused, clear, and actionable for a security analyst."""
+            
+            response = self.llm_handler.chat(
+                model=self.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                options={
+                    "temperature": 0.3,   # Lower temp for consistent analysis
+                    "top_p": 0.9,
+                    "num_ctx": 2048,
+                    "num_predict": 500,   # Keep focused
+                }
+            )
+            
+            return response.get("message", {}).get("content")
+        except Exception as e:
+            log.warning(f"LLM synthesis failed: {e}")
+            return None
 
     def enrich_alert(
         self,

@@ -139,13 +139,15 @@ class RAGQueryRequest(BaseModel):
     query: str = Field(..., min_length=3, max_length=500)
     max_results: int = Field(default=5, ge=1, le=20)
     collection: Optional[str] = Field(default=None, description="behavioral_incidents or threat_intelligence")
+    use_llm: bool = Field(default=True, description="Use LLM to synthesize results into explanation")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "What are indicators of privilege escalation in AWS?",
                 "max_results": 5,
-                "collection": "threat_intelligence"
+                "collection": "threat_intelligence",
+                "use_llm": True
             }
         }
 
@@ -162,6 +164,7 @@ class RAGQueryResponse(BaseModel):
     query: str
     results: List[RAGQueryResult]
     collection: str
+    explanation: Optional[str] = None  # LLM-generated synthesis of results
 
 
 # ── Playbook Models ────────────────────────────────────────────────────────

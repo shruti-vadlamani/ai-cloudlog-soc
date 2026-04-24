@@ -196,6 +196,7 @@ function KnowledgeGraphView() {
   const [queryingGraph, setQueryingGraph] = useState(false);
   const [querySummary, setQuerySummary] = useState('');
   const [queryInsights, setQueryInsights] = useState([]);
+  const [queryExplanation, setQueryExplanation] = useState('');
 
   const attackTypeOptions = useMemo(() => {
     const values = [
@@ -371,6 +372,7 @@ function KnowledgeGraphView() {
       mergeGraphData(await res.json());
       setQuerySummary('');
       setQueryInsights([]);
+      setQueryExplanation('');
       if (networkRef.current) {
         networkRef.current.fit({ animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
       }
@@ -571,6 +573,7 @@ function KnowledgeGraphView() {
 
       setQuerySummary(payload.summary || 'Graph query completed.');
       setQueryInsights(payload.insights || []);
+      setQueryExplanation(payload.explanation || '');
 
       if (networkRef.current) {
         networkRef.current.fit({ animation: { duration: 420, easingFunction: 'easeInOutQuad' } });
@@ -789,6 +792,7 @@ function KnowledgeGraphView() {
               clearTraceHighlight();
               setQuerySummary('');
               setQueryInsights([]);
+              setQueryExplanation('');
             }}>
               Clear
             </button>
@@ -830,6 +834,37 @@ function KnowledgeGraphView() {
                 {queryInsights.map((item) => <li key={item}>{item}</li>)}
               </ul>
             ) : null}
+          </div>
+        )}
+
+        {queryExplanation && (
+          <div style={{
+            marginTop: '1.5rem',
+            padding: '1.5rem',
+            background: '#1e3a5f',
+            border: '2px solid #10b981',
+            borderRadius: '0.5rem'
+          }}>
+            <div style={{
+              fontSize: '1rem',
+              fontWeight: 600,
+              color: '#10b981',
+              marginBottom: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              🤖 AI-Powered Graph Analysis
+            </div>
+            <div style={{
+              color: '#e2e8f0',
+              lineHeight: '1.8',
+              fontSize: '0.95rem',
+              whiteSpace: 'pre-wrap',
+              wordWrap: 'break-word'
+            }}>
+              {queryExplanation}
+            </div>
           </div>
         )}
       </div>

@@ -1,14 +1,14 @@
 {
   "model": "LOF",
-  "precision": 0.118,
-  "recall": 0.2865,
-  "f1": 0.1672,
-  "roc_auc": 0.7853,
-  "true_positives": 55,
-  "false_positives": 411,
-  "true_negatives": 7156,
-  "false_negatives": 137,
-  "false_positive_rate": 0.0543,
+  "precision": 0.1586,
+  "recall": 0.2447,
+  "f1": 0.1925,
+  "roc_auc": 0.8269,
+  "true_positives": 46,
+  "false_positives": 244,
+  "true_negatives": 9210,
+  "false_negatives": 142,
+  "false_positive_rate": 0.0258,
   "per_attack_detection": {
     "privilege_escalation": {
       "total_windows": 4,
@@ -16,9 +16,9 @@
       "detection_rate": 1.0
     },
     "data_exfiltration": {
-      "total_windows": 138,
-      "detected": 28,
-      "detection_rate": 0.2028985507246377
+      "total_windows": 136,
+      "detected": 27,
+      "detection_rate": 0.19852941176470587
     },
     "insider_threat": {
       "total_windows": 6,
@@ -26,9 +26,9 @@
       "detection_rate": 1.0
     },
     "reconnaissance": {
-      "total_windows": 41,
-      "detected": 14,
-      "detection_rate": 0.34146341463414637
+      "total_windows": 39,
+      "detected": 6,
+      "detection_rate": 0.15384615384615385
     },
     "backdoor_creation": {
       "total_windows": 3,
@@ -36,6 +36,6 @@
       "detection_rate": 1.0
     }
   },
-  "n_neighbors": 86,
-  "threshold": 1.2909009220134289
+  "n_neighbors": 107,
+  "threshold": 1.4228238438479424
 }

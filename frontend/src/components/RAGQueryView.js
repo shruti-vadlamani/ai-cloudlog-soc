@@ -7,6 +7,14 @@ function RAGQueryView() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+
+  const exampleQueries = [
+    "What are the indicators of privilege escalation in AWS?",
+    "How to detect and respond to S3 bucket data exfiltration?",
+    "What are the lateral movement techniques in cloud environments?",
+    "How to identify suspicious IAM role assumption patterns?",
+  ];
 
   const handleQuery = async (e) => {
     e.preventDefault();
@@ -22,18 +30,64 @@ function RAGQueryView() {
         body: JSON.stringify({
           query: query.trim(),
           collection: collection === 'all' ? undefined : collection,
-          top_k: 5
+          max_results: 5,
+          use_llm: true
         })
       });
 
-      if (!response.ok) throw new Error('Query failed');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Query failed with status ${response.status}`);
+      }
       
       const data = await response.json();
       setResults(data);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'An error occurred while querying the knowledge base');
+      console.error('Query error:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleExampleQuery = (exampleQuery) => {
+    setQuery(exampleQuery);
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!results || results.results.length === 0) return;
+
+    try {
+      setDownloadingPdf(true);
+      
+      const response = await fetch(apiUrl('/api/rag/export/pdf'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: results.query,
+          collection: results.collection,
+          max_results: results.results.length
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate PDF');
+      }
+
+      // Get the PDF blob and trigger download
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `query_report_${results.query.substring(0, 30).replace(/\s+/g, '_')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      alert('Failed to download PDF: ' + err.message);
+    } finally {
+      setDownloadingPdf(false);
     }
   };
 
@@ -54,17 +108,33 @@ function RAGQueryView() {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Enter your security-related query... (e.g., 'privilege escalation techniques', 'S3 bucket misconfigurations')"
               rows={4}
-              style={{ width: '100%', resize: 'vertical' }}
+              style={{ 
+                width: '100%', 
+                resize: 'vertical',
+                padding: '0.75rem',
+                borderRadius: '0.375rem',
+                border: '1px solid #334155',
+                background: '#1e293b',
+                color: '#e2e8f0',
+                fontFamily: 'inherit'
+              }}
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', marginBottom: '1rem' }}>
             <div className="filter-group">
               <label className="filter-label">Collection</label>
               <select
                 value={collection}
                 onChange={(e) => setCollection(e.target.value)}
-                style={{ width: '250px' }}
+                style={{ 
+                  width: '250px',
+                  padding: '0.5rem',
+                  borderRadius: '0.375rem',
+                  border: '1px solid #334155',
+                  background: '#1e293b',
+                  color: '#e2e8f0'
+                }}
               >
                 <option value="all">All Collections</option>
                 <option value="threat_intelligence">Threat Intelligence</option>
@@ -77,72 +147,169 @@ function RAGQueryView() {
             </button>
           </div>
         </form>
+
+        {/* Example queries */}
+        <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #334155' }}>
+          <p style={{ fontSize: '0.875rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+            💡 Try one of these example queries:
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {exampleQueries.map((example, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleExampleQuery(example)}
+                style={{
+                  padding: '0.5rem 0.875rem',
+                  fontSize: '0.8125rem',
+                  background: '#334155',
+                  color: '#3b82f6',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '0.375rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#3b82f6';
+                  e.currentTarget.style.color = '#ffffff';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#334155';
+                  e.currentTarget.style.color = '#3b82f6';
+                }}
+              >
+                {example.substring(0, 40)}...
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {error && (
-        <div className="error">
-          <strong>Error:</strong> {error}
+        <div style={{
+          background: '#7f1d1d',
+          border: '1px solid #dc2626',
+          color: '#fca5a5',
+          padding: '1rem',
+          borderRadius: '0.5rem',
+          marginBottom: '1.5rem'
+        }}>
+          <strong>⚠️ Error:</strong> {error}
         </div>
       )}
 
       {loading && (
-        <div className="loading">
-          <div className="loading-spinner"></div>
-          <p>Querying knowledge base...</p>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2rem',
+          textAlign: 'center'
+        }}>
+          <div className="loading-spinner" style={{ marginBottom: '1rem' }}></div>
+          <p style={{ color: '#e2e8f0' }}>Querying knowledge base...</p>
+          <p style={{ fontSize: '0.875rem', color: '#94a3b8', marginTop: '0.5rem' }}>
+            This may take a moment while we search for relevant information.
+          </p>
         </div>
       )}
 
       {results && results.results && results.results.length > 0 && (
         <div>
-          <div style={{ 
-            marginBottom: '1rem', 
-            color: '#94a3b8', 
-            fontSize: '0.875rem' 
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '1.5rem',
+            padding: '1rem',
+            background: '#1e293b',
+            borderRadius: '0.5rem'
           }}>
-            Found {results.results.length} results in {results.query_time?.toFixed(3)}s
+            <div style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+              ✅ Found <strong>{results.results.length}</strong> relevant result{results.results.length !== 1 ? 's' : ''}
+            </div>
+            <button
+              onClick={handleDownloadPdf}
+              disabled={downloadingPdf}
+              style={{
+                padding: '0.5rem 1rem',
+                background: downloadingPdf ? '#64748b' : '#10b981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '0.375rem',
+                cursor: downloadingPdf ? 'not-allowed' : 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: 500,
+                transition: 'background 0.2s'
+              }}
+              onMouseEnter={(e) => !downloadingPdf && (e.currentTarget.style.background = '#059669')}
+              onMouseLeave={(e) => !downloadingPdf && (e.currentTarget.style.background = '#10b981')}
+            >
+              {downloadingPdf ? '⏳ Generating PDF...' : '📄 Download PDF Report'}
+            </button>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {results.results.map((result, idx) => (
-              <div key={idx} className="card" style={{ 
-                borderLeft: '4px solid #3b82f6',
-                transition: 'transform 0.2s',
-                cursor: 'pointer'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = 'translateX(4px)'}
-              onMouseLeave={(e) => e.currentTarget.style.transform = 'translateX(0)'}
+              <div 
+                key={idx} 
+                className="card" 
+                style={{
+                  borderLeft: '4px solid #3b82f6',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  cursor: 'pointer'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateX(4px)';
+                  e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(59, 130, 246, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateX(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ 
-                      fontSize: '0.875rem', 
-                      color: '#3b82f6', 
+                    <div style={{
+                      fontSize: '0.875rem',
+                      color: '#3b82f6',
                       fontWeight: 600,
                       marginBottom: '0.25rem'
                     }}>
-                      {result.metadata?.source || 'Knowledge Base'}
+                      Result #{idx + 1}
                     </div>
-                    <div style={{ 
-                      fontSize: '0.8125rem', 
-                      color: '#64748b' 
-                    }}>
-                      Collection: {result.metadata?.collection || 'Unknown'}
-                    </div>
+                    {result.metadata?.source && (
+                      <div style={{
+                        fontSize: '0.8125rem',
+                        color: '#64748b'
+                      }}>
+                        📌 <strong>Source:</strong> {result.metadata.source}
+                      </div>
+                    )}
+                    {result.metadata?.collection && (
+                      <div style={{
+                        fontSize: '0.8125rem',
+                        color: '#64748b'
+                      }}>
+                        📂 <strong>Collection:</strong> {result.metadata.collection}
+                      </div>
+                    )}
                   </div>
                   <div style={{
-                    background: '#334155',
-                    padding: '0.25rem 0.75rem',
+                    background: '#1e579f',
+                    padding: '0.375rem 0.875rem',
                     borderRadius: '0.5rem',
                     fontSize: '0.8125rem',
                     fontWeight: 600,
-                    color: '#10b981'
+                    color: '#10b981',
+                    textAlign: 'right'
                   }}>
                     {(result.similarity * 100).toFixed(1)}% match
                   </div>
                 </div>
 
-                <div style={{ 
-                  color: '#e2e8f0', 
+                <div style={{
+                  color: '#e2e8f0',
                   lineHeight: '1.6',
                   fontSize: '0.9375rem',
                   marginBottom: '0.75rem'
@@ -151,28 +318,29 @@ function RAGQueryView() {
                 </div>
 
                 {result.metadata && Object.keys(result.metadata).length > 0 && (
-                  <details style={{ 
+                  <details style={{
                     marginTop: '0.75rem',
                     paddingTop: '0.75rem',
                     borderTop: '1px solid #334155'
                   }}>
-                    <summary style={{ 
-                      cursor: 'pointer', 
-                      color: '#94a3b8', 
+                    <summary style={{
+                      cursor: 'pointer',
+                      color: '#94a3b8',
                       fontSize: '0.875rem',
                       fontWeight: 500
                     }}>
-                      View Metadata
+                      View Full Metadata
                     </summary>
-                    <div style={{ 
+                    <div style={{
                       marginTop: '0.5rem',
                       background: '#0f172a',
                       padding: '0.75rem',
                       borderRadius: '0.375rem',
                       fontSize: '0.8125rem',
-                      fontFamily: 'monospace'
+                      fontFamily: 'monospace',
+                      overflowX: 'auto'
                     }}>
-                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#94a3b8' }}>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#94a3b8', wordBreak: 'break-word' }}>
                         {JSON.stringify(result.metadata, null, 2)}
                       </pre>
                     </div>
@@ -181,29 +349,71 @@ function RAGQueryView() {
               </div>
             ))}
           </div>
+
+          {results.explanation && (
+            <div style={{
+              marginTop: '2rem',
+              padding: '1.5rem',
+              background: '#1e3a5f',
+              border: '2px solid #10b981',
+              borderRadius: '0.5rem'
+            }}>
+              <div style={{
+                fontSize: '1rem',
+                fontWeight: 600,
+                color: '#10b981',
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                🤖 AI Analysis & Explanation
+              </div>
+              <div style={{
+                color: '#e2e8f0',
+                lineHeight: '1.8',
+                fontSize: '0.95rem',
+                whiteSpace: 'pre-wrap',
+                wordWrap: 'break-word'
+              }}>
+                {results.explanation}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {results && results.results && results.results.length === 0 && (
-        <div className="empty-state">
-          <div className="empty-state-icon">🔍</div>
-          <p>No results found for your query</p>
-          <p style={{ fontSize: '0.875rem', color: '#64748b', marginTop: '0.5rem' }}>
+        <div style={{
+          background: 'rgba(59, 130, 246, 0.05)',
+          border: '1px solid #3b82f6',
+          borderRadius: '0.5rem',
+          padding: '2rem',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
+          <p style={{ color: '#e2e8f0', marginBottom: '0.5rem' }}>No results found for your query</p>
+          <p style={{ fontSize: '0.875rem', color: '#64748b' }}>
             Try different keywords or select a different collection
           </p>
         </div>
       )}
 
-      {!results && !loading && (
-        <div className="card" style={{ background: 'rgba(59, 130, 246, 0.05)' }}>
-          <h3 style={{ color: '#3b82f6', marginBottom: '1rem' }}>💡 Query Tips</h3>
-          <ul style={{ paddingLeft: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <li>Ask about specific attack techniques (e.g., "credential dumping", "lateral movement")</li>
-            <li>Search for AWS service security issues (e.g., "S3 bucket public access")</li>
-            <li>Look up incident response procedures (e.g., "how to respond to data exfiltration")</li>
-            <li>Query MITRE ATT&CK tactics and techniques</li>
-            <li>Find similar past security incidents from your behavioral data</li>
+      {!results && !loading && !error && (
+        <div className="card" style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+          <h3 style={{ color: '#3b82f6', marginBottom: '1rem' }}>💡 Getting Started with Queries</h3>
+          <ul style={{ paddingLeft: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', color: '#cbd5e1' }}>
+            <li><strong>Ask about attack techniques</strong> - e.g., "credential dumping", "lateral movement in AWS"</li>
+            <li><strong>Search for AWS issues</strong> - e.g., "S3 bucket public access", "insecure EC2 security groups"</li>
+            <li><strong>Look up incident response</strong> - e.g., "how to respond to data exfiltration", "ransomware containment"</li>
+            <li><strong>Query MITRE techniques</strong> - e.g., "T1078", "privilege escalation"</li>
+            <li><strong>Find similar incidents</strong> - e.g., "insider threat indicators", "compromised credentials"</li>
           </ul>
+          <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '0.375rem' }}>
+            <p style={{ color: '#10b981', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
+              ✨ <strong>Tip:</strong> Use the example queries above or click on them to populate the search box.
+            </p>
+          </div>
         </div>
       )}
     </div>
