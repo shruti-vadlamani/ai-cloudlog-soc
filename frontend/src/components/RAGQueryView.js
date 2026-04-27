@@ -1,6 +1,30 @@
 import React, { useState } from 'react';
 import { apiUrl } from '../api';
 
+// Simple markdown to HTML converter for SOC analyst responses
+function markdownToHtml(text) {
+  if (!text) return '';
+  let html = text
+    // Headers - BOLD BLACK
+    .replace(/^### (.+)$/gm, '<h3 style="margin-top: 1rem; margin-bottom: 0.5rem; font-weight: bold; font-size: 1.1rem; color: #000000;">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 style="margin-top: 1.5rem; margin-bottom: 0.5rem; font-weight: bold; font-size: 1.3rem; color: #000000;">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 style="margin-top: 2rem; margin-bottom: 1rem; font-weight: bold; font-size: 1.5rem; color: #000000;">$1</h1>')
+    // Horizontal rules
+    .replace(/^---+$/gm, '<hr style="margin: 1rem 0; border-top: 1px solid #cccccc;" />')
+    // Bold and italic
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color: #000000;">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em style="color: #000000;">$1</em>')
+    // Bullet lists
+    .replace(/^\* (.+)$/gm, '<li style="margin-left: 1.5rem; color: #000000;">$1</li>')
+    .replace(/^\d+\. (.+)$/gm, '<li style="margin-left: 1.5rem; color: #000000;">$1</li>')
+    // Code blocks
+    .replace(/`([^`]+)`/g, '<code style="background: #f0f0f0; color: #000000; padding: 0.2rem 0.4rem; border-radius: 0.25rem;">$1</code>')
+    // Line breaks
+    .replace(/\n/g, '<br />');
+  
+  return html;
+}
+
 function RAGQueryView() {
   const [query, setQuery] = useState('');
   const [collection, setCollection] = useState('all');
@@ -38,6 +62,7 @@ function RAGQueryView() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || `Query failed with status ${response.status}`);
+
       }
       
       const data = await response.json();
@@ -354,9 +379,9 @@ function RAGQueryView() {
             <div style={{
               marginTop: '2rem',
               padding: '1.5rem',
-              background: '#1e3a5f',
-              border: '2px solid #10b981',
-              borderRadius: '0.5rem'
+              borderRadius: '0.5rem',
+              width: '100%',
+              boxSizing: 'border-box'
             }}>
               <div style={{
                 fontSize: '1rem',
@@ -370,13 +395,16 @@ function RAGQueryView() {
                 🤖 AI Analysis & Explanation
               </div>
               <div style={{
-                color: '#e2e8f0',
+                color: '#000000',
                 lineHeight: '1.8',
                 fontSize: '0.95rem',
-                whiteSpace: 'pre-wrap',
-                wordWrap: 'break-word'
-              }}>
-                {results.explanation}
+                wordWrap: 'break-word',
+                overflowWrap: 'break-word',
+                whiteSpace: 'normal',
+                overflow: 'visible',
+                maxHeight: 'none',
+                maxWidth: '100%'
+              }} dangerouslySetInnerHTML={{ __html: markdownToHtml(results.explanation) }}>
               </div>
             </div>
           )}

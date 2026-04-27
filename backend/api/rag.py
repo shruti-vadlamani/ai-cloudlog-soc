@@ -4,6 +4,7 @@ backend/api/rag.py
 API endpoints for RAG-powered queries and graph exploration.
 """
 
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,8 @@ from backend.models.schemas import (
 )
 from backend.services.rag_service import get_rag_service, RAGService
 from backend.services.pdf_service import get_pdf_service, PDFService
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -272,6 +275,7 @@ def expand_graph_node(
 def query_graph_insights(
     query: str = Body(..., embed=True, min_length=2),
     limit: int = Body(25, embed=True, ge=5, le=80),
+    rag_service: RAGService = Depends(get_rag_service),
 ):
     """
     Search graph with natural language and return graph + LLM explanation.
@@ -288,14 +292,36 @@ def query_graph_insights(
     if not q:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
+    # Extract meaningful keywords from query (remove stop words)
+    stop_words = {'what', 'is', 'the', 'a', 'an', 'are', 'and', 'or', 'of', 'in', 'on', 'at', 'how', 'why', 'when', 'where', 'can', 'i', 'you', 'we', 'they', 'about', 'show', 'tell', 'find'}
+    keywords = [w for w in q.split() if w not in stop_words and len(w) > 2]
+    
+    # Synonym mapping for better matching
+    synonym_map = {
+        'mitre': ['technique', 'att&ck', 'tactic'],
+        'alert': ['detection', 'anomaly', 'window'],
+        'user': ['identity', 'account', 'principal'],
+        'privilege': ['escalation', 'permission', 'access'],
+        'attack': ['technique', 'pattern', 'threat'],
+        'playbook': ['response', 'procedure', 'runbook'],
+        'threat': ['attack', 'incident', 'pattern'],
+    }
+    
+    expanded_keywords = set(keywords)
+    for keyword in keywords:
+        if keyword in synonym_map:
+            expanded_keywords.update(synonym_map[keyword])
+    
+    log.info(f"Query keywords: {keywords}, Expanded: {expanded_keywords}")
+
     driver, session = _graph_session()
     try:
-        # First try: direct keyword match
+        # First try: enhanced keyword match with multiple term matching
         log.info(f"Running keyword query for: {query}")
         rows = list(session.run(
             """
             MATCH (n)
-            WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+            WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
               AND (
                 toLower(coalesce(n.name, '')) CONTAINS $q
                 OR toLower(coalesce(n.id, '')) CONTAINS $q
@@ -304,6 +330,7 @@ def query_graph_insights(
                 OR toLower(coalesce(n.window_id, '')) CONTAINS $q
                 OR toLower(coalesce(n.user_name, '')) CONTAINS $q
                 OR toLower(coalesce(n.description, '')) CONTAINS $q
+                OR any(keyword IN $expanded_keywords WHERE toLower(coalesce(n.name, '') + ' ' + coalesce(n.description, '')) CONTAINS keyword)
               )
             WITH n
             LIMIT $limit
@@ -312,6 +339,7 @@ def query_graph_insights(
             LIMIT $limit * 8
             """,
             q=q,
+            expanded_keywords=list(expanded_keywords),
             limit=limit,
         ))
         
@@ -349,7 +377,7 @@ def query_graph_insights(
             all_nodes_result = session.run(
                 """
                 MATCH (n)
-                WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
                 RETURN n
                 LIMIT 50
                 """
@@ -370,8 +398,8 @@ def query_graph_insights(
                 neighbors_result = session.run(
                     """
                     MATCH (n)-[r]-(m)
-                    WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
-                      AND any(lbl IN labels(m) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                    WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
+                      AND any(lbl IN labels(m) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
                     RETURN n, r, m
                     LIMIT 100
                     """
@@ -437,8 +465,7 @@ def query_graph_insights(
                 insights.append("Hover over nodes to inspect details. Double-click to expand neighbors.")
         
         # Generate LLM explanation about the graph findings
-        # TODO: Implement async LLM explanation later
-        explanation = None
+        explanation = _generate_graph_explanation(query, nodes, edges, matched_values, rag_service)
 
         log.info(f"Returning {len(nodes)} nodes and {len(edges)} edges")
         
@@ -460,53 +487,110 @@ def query_graph_insights(
 
 def _generate_graph_explanation(query: str, nodes: dict, edges: dict, matches: list, rag_service: RAGService) -> Optional[str]:
     """
-    Use LLM to generate a detailed explanation of what the graph query found.
+    Use Vertex AI (Gemini) to generate a structured SOC analyst response about graph findings.
     """
     if not rag_service.llm_handler:
         return None
     
     try:
-        # Build context from the graph
+        # Build comprehensive context from the graph
         node_summary = _summarize_nodes(nodes)
         edge_summary = _summarize_edges(edges)
         match_summary = _summarize_matches(matches) if matches else "No specific entity matches."
         
-        prompt = f"""Based on this knowledge graph analysis, provide a detailed explanation of the security findings.
-
-User Question: {query}
-
-Graph Summary:
-- Total entities: {len(nodes)}
-- Total relationships: {len(edges)}
-- Entity types found: {node_summary}
-- Key relationships: {edge_summary}
-- Specific matches: {match_summary}
-
-Please provide:
-1. What does this graph show about the question asked?
-2. Key security findings and patterns visible in the graph
-3. Relationships between entities (users, techniques, patterns, incidents)
-4. Risk assessment based on the patterns
-5. Recommended actions or next steps for the security team
-
-Be specific and actionable for security analysts."""
+        # Build detailed node context with properties and relationships
+        detailed_nodes = []
+        for node_id, node_data in list(nodes.items())[:10]:  # Top 10 nodes
+            node_type = node_data.get("type", "Unknown")
+            node_name = node_data.get("label", node_data.get("key", node_id))
+            node_props = node_data.get("properties", {})
+            detailed_nodes.append(f"  - {node_name} ({node_type}): {str(node_props)[:200]}")
         
-        # Call LLM without timeout (Ollama doesn't support it)
-        response = rag_service.llm_handler.chat(
-            model=rag_service.llm_model,
-            messages=[{"role": "user", "content": prompt}],
-            options={
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "num_ctx": 1024,  # Reduced context window
-                "num_predict": 400,  # Shorter response for faster generation
-            },
+        detailed_nodes_text = "\n".join(detailed_nodes) if detailed_nodes else "  No detailed node information available"
+        
+        # Build edge context showing relationships
+        edge_details = []
+        for edge_data in list(edges.values())[:15]:  # Top 15 edges
+            edge_type = edge_data.get("label", "relates_to")
+            source = edge_data.get("source_label", "Unknown")
+            target = edge_data.get("target_label", "Unknown")
+            edge_details.append(f"  - {source} --[{edge_type}]--> {target}")
+        
+        edges_text = "\n".join(edge_details) if edge_details else "  No relationship details available"
+        
+        soc_system_prompt = """You are an expert AWS Cloud Security Operations Center (SOC) analyst with deep expertise in:
+- AWS CloudTrail log analysis and event pattern recognition
+- MITRE ATT&CK framework (techniques, tactics, procedures)
+- IAM privilege escalation, lateral movement, and data exfiltration patterns
+- Anomaly detection models and alert correlation
+- Incident response procedures and AWS-specific containment actions
+- Threat intelligence correlation
+
+You are analyzing a knowledge graph query to help security analysts investigate potential threats.
+Answer ONLY using the provided graph context. Be specific, technical, and immediately actionable."""
+
+        context = f"""KNOWLEDGE GRAPH ANALYSIS:
+        
+Matched Entities: {match_summary}
+
+Entity Types Found:
+{node_summary}
+
+Key Relationships:
+{edge_summary}
+
+Detailed Entities (top 10):
+{detailed_nodes_text}
+
+Relationship Details (top 15):
+{edges_text}"""
+
+        prompt = f"""{soc_system_prompt}
+
+{context}
+
+ANALYST QUESTION: {query}
+
+REQUIRED RESPONSE FORMAT (fill all sections):
+
+### Key Findings
+[What the graph shows about the question - 2-3 sentences]
+
+### Entity Analysis
+[List matched entity types and their relevance - use bullet points]
+
+### Relationship Patterns
+[Describe key relationships visible in the graph and security implications]
+
+### MITRE ATT&CK Mapping
+[If techniques are found, list technique IDs and tactics - otherwise state "Not directly applicable"]
+
+### CloudTrail Detection Signals
+[AWS API calls or events to monitor based on this graph pattern]
+
+### Risk Assessment
+Severity: [CRITICAL | HIGH | MEDIUM | LOW]
+Blast Radius: [Potential impact if this pattern is malicious]
+
+### Immediate Next Steps
+1. [First action for analyst]
+2. [Second action for analyst]
+3. [Third action for analyst]
+
+Be concise and specific - no generic statements."""
+
+        log.info(f"Graph explanation: using {len(nodes)} nodes, {len(edges)} edges, {len(matches)} matches")
+
+        explanation = rag_service.llm_handler.generate_text_sync(
+            prompt=prompt,
+            temperature=0.2,  # Deterministic for consistency
+            max_tokens=3000,  # Increased to ensure complete response without truncation
+            top_p=0.9,
         )
-        
-        return response.get("message", {}).get("content")
+        return explanation if explanation else None
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning(f"Graph explanation LLM failed: {e}")
+        logging.getLogger(__name__).warning(f"Graph explanation generation failed: {e}")
         return None
 
 
@@ -561,7 +645,7 @@ def query_knowledge_base(
     - **behavioral_incidents**: Past alert windows with behavioral context
     - **threat_intelligence**: MITRE techniques, AWS-specific indicators
 
-    If `use_llm=true`, uses Ollama to synthesize results into a detailed explanation.
+    If `use_llm=true`, uses Google Vertex AI (Gemini) to synthesize results into a detailed explanation.
 
     Example request:
     ```json

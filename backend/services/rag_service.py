@@ -23,8 +23,163 @@ from backend.models.schemas import (
     RAGQueryResponse,
     RAGQueryResult,
 )
+from backend.services.vertex_ai_client import get_vertex_ai_client
 
 log = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────
+# ADD THIS — static system prompt for the SOC AI
+# ─────────────────────────────────────────────
+SOC_SYSTEM_PROMPT = """You are an expert AI Security Analyst embedded in a 
+cloud-based Security Operations Center (SOC) monitoring AWS environments. 
+You have deep knowledge of:
+- AWS CloudTrail log analysis and event interpretation
+- MITRE ATT&CK framework techniques, tactics, and procedures (TTPs)
+- Anomaly detection using Isolation Forest, LOF, and Autoencoder models
+- IAM privilege escalation, lateral movement, data exfiltration patterns
+- Incident response playbooks for cloud environments
+- Threat intelligence and behavioral analytics
+
+Your job is to help SOC analysts investigate alerts, understand attack patterns, 
+and take decisive action. Always be specific, technical, and actionable.
+
+RULES:
+- Use ONLY the retrieved context provided below to answer. Do not hallucinate.
+- If the context does not contain enough information, say so clearly.
+- Always reference the MITRE ATT&CK technique ID when relevant (e.g., T1078).
+- Structure your answers clearly for a security analyst reading under time pressure.
+- Never give vague answers like "it depends" — always give concrete next steps.
+"""
+
+# ─────────────────────────────────────────────
+# QUERY-TYPE SPECIFIC PROMPT TEMPLATES
+# ─────────────────────────────────────────────
+PROMPT_TEMPLATES = {
+
+    "technique_lookup": """
+{system}
+
+## RETRIEVED CONTEXT:
+{context}
+
+## ANALYST QUESTION:
+{query}
+
+## YOUR RESPONSE FORMAT:
+**MITRE Technique:** [ID and Name]
+**Tactic:** [Which tactic this belongs to]
+**What it means in AWS:** [2-3 sentence explanation]
+**CloudTrail Events to Watch:** [Specific API calls]
+**Detection Signals:** [Concrete indicators]
+**Immediate Response Steps:**
+1. [Step 1]
+2. [Step 2]
+3. [Step 3]
+**Severity:** [CRITICAL / HIGH / MEDIUM / LOW]
+""",
+
+    "alert_investigation": """
+{system}
+
+## RETRIEVED CONTEXT FROM KNOWLEDGE BASE:
+{context}
+
+## ALERT DETAILS:
+{query}
+
+## YOUR RESPONSE FORMAT:
+**Likely Attack Pattern:** [Name and MITRE ID]
+**Why This Is Suspicious:** [Explain what the anomaly models detected]
+**Blast Radius:** [What could the attacker do if this is real]
+**Investigation Steps:**
+1. [What to check first in CloudTrail]
+2. [What to check second]
+3. [Pivoting steps]
+**Containment Actions:**
+1. [Immediate containment]
+2. [Secondary containment]
+**False Positive Check:** [How to rule out a false positive]
+**Severity Assessment:** [CRITICAL / HIGH / MEDIUM / LOW with reason]
+""",
+
+    "playbook_lookup": """
+{system}
+
+## RETRIEVED PLAYBOOK CONTEXT:
+{context}
+
+## ANALYST REQUEST:
+{query}
+
+## YOUR RESPONSE FORMAT:
+**Playbook:** [Name]
+**Trigger Condition:** [When to use this playbook]
+**Phase 1 — Immediate (0-15 min):**
+- [Action 1]
+- [Action 2]
+**Phase 2 — Investigation (15-60 min):**
+- [Action 1]
+- [Action 2]
+**Phase 3 — Containment & Recovery:**
+- [Action 1]
+- [Action 2]
+**AWS CLI Commands:**
+```bash
+[Relevant AWS CLI commands for this scenario]
+```
+**Escalation Criteria:** [When to escalate to senior analyst or management]
+""",
+
+    "detection_explanation": """
+{system}
+
+## RETRIEVED CONTEXT:
+{context}
+
+## ANALYST QUESTION:
+{query}
+
+## YOUR RESPONSE FORMAT:
+**Detection Model Triggered:** [Isolation Forest / LOF / Autoencoder / Ensemble]
+**What the Model Detected:** [Plain English explanation of why this scored high]
+**Ensemble Score Interpretation:** [What the score range means]
+**Key Features That Drove This Alert:** [Feature names and why they matter]
+**Historical Baseline Context:** [What normal looks like vs what was seen]
+**Recommended Threshold Tuning:** [If this looks like a false positive pattern]
+""",
+
+    "general_soc": """
+{system}
+
+## RETRIEVED CONTEXT:
+{context}
+
+## ANALYST QUESTION:
+{query}
+
+## YOUR RESPONSE:
+Provide a clear, technical, and actionable answer. 
+Reference specific MITRE techniques, AWS services, or detection signals where relevant.
+End with 2-3 concrete next steps the analyst should take right now.
+""",
+}
+
+def _detect_query_type(query: str) -> str:
+    """
+    Classify the query to select the right prompt template.
+    Simple keyword-based routing — no ML needed here.
+    """
+    q = query.lower()
+    if any(w in q for w in ["t1", "t2", "technique", "mitre", "ttp", "tactic"]):
+        return "technique_lookup"
+    if any(w in q for w in ["alert", "anomaly", "score", "flagged", "detected", "suspicious user"]):
+        return "alert_investigation"
+    if any(w in q for w in ["playbook", "response", "contain", "remediate", "steps", "what should i do"]):
+        return "playbook_lookup"
+    if any(w in q for w in ["isolation forest", "lof", "autoencoder", "ensemble", "model", "why did", "false positive"]):
+        return "detection_explanation"
+    return "general_soc"
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -41,7 +196,7 @@ class RAGService:
         self._init_rag()
     
     def _init_rag(self):
-        """Initialize RAG components (ChromaDB, Neo4j, AlertEnricher)"""
+        """Initialize RAG components (ChromaDB, Neo4j, AlertEnricher, Vertex AI)"""
         try:
             import chromadb
             from sentence_transformers import SentenceTransformer
@@ -79,6 +234,17 @@ class RAGService:
         except Exception as e:
             log.warning(f"Neo4j connection failed: {e}")
             log.warning("Alert enrichment will be limited without Neo4j")
+        
+        # Initialize Vertex AI for LLM
+        try:
+            self.llm_handler = get_vertex_ai_client()
+            if self.llm_handler:
+                log.info("Vertex AI (Gemini) LLM initialized successfully")
+            else:
+                log.warning("Failed to initialize Vertex AI - LLM features will be disabled")
+        except Exception as e:
+            log.warning(f"Vertex AI initialization failed: {e}. LLM features will be disabled.")
+            self.llm_handler = None
 
     def query_knowledge_base(
         self,
@@ -163,50 +329,47 @@ class RAGService:
     
     def _generate_explanation(self, query: str, results: List[RAGQueryResult]) -> Optional[str]:
         """
-        Use LLM to synthesize query results into a detailed explanation.
+        Use Vertex AI (Gemini) to synthesize query results into a detailed explanation.
+        Uses query-type-specific prompt templates for structured SOC responses.
         """
         if not self.llm_handler:
             return None
-        
+
         try:
-            # Build context from results
+            # Build rich context from top results
             context_parts = []
-            for i, result in enumerate(results[:3], 1):  # Use top 3 results
-                context_parts.append(f"[{i}] {result.content[:300]}")
-            
+            for i, result in enumerate(results[:5], 1):  # increased to top 5
+                source = result.metadata.get("source", "knowledge base")
+                technique = result.metadata.get("technique_id", "")
+                header = f"[Source {i}: {source}" + (f" | {technique}]" if technique else "]")
+                context_parts.append(f"{header}\n{result.content[:600]}")
+
             context = "\n\n".join(context_parts)
-            
-            prompt = f"""Based on the following security knowledge and past incidents, provide a detailed, actionable answer to the user's question.
 
-User Question: {query}
+            # Pick the right prompt template based on query type
+            query_type = _detect_query_type(query)
+            template = PROMPT_TEMPLATES[query_type]
 
-Relevant Knowledge:
-{context}
-
-Please provide:
-1. Direct answer to the question
-2. Key indicators or patterns mentioned
-3. Recommended actions or next steps
-4. Any relevant security best practices
-
-Keep the response focused, clear, and actionable for a security analyst."""
-            
-            response = self.llm_handler.chat(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": 0.3,   # Lower temp for consistent analysis
-                    "top_p": 0.9,
-                    "num_ctx": 2048,
-                    "num_predict": 500,   # Keep focused
-                }
+            prompt = template.format(
+                system=SOC_SYSTEM_PROMPT,
+                context=context,
+                query=query,
             )
-            
-            return response.get("message", {}).get("content")
+
+            log.info(f"Using prompt template: {query_type} for query: {query[:60]}")
+
+            explanation = self.llm_handler.generate_text_sync(
+                prompt=prompt,
+                temperature=0.2,   # lower = more factual, less creative
+                max_tokens=3000,   # increased to ensure complete response without truncation
+                top_p=0.85,
+            )
+
+            return explanation if explanation else None
+
         except Exception as e:
             log.warning(f"LLM synthesis failed: {e}")
             return None
-
     def enrich_alert(
         self,
         alert: Alert,

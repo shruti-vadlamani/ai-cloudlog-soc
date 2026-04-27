@@ -22,10 +22,16 @@ neo4j>=5.14.0
 sentence-transformers>=2.2.0
 python-dotenv>=1.0.0
 
+# Google Cloud / Vertex AI (LLM synthesis)
+google-cloud-aiplatform>=1.42.0
+google-auth>=2.25.0
+
 # FastAPI backend
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+gunicorn>=21.2.0
 pydantic>=2.0.0
+python-multipart>=0.0.6
 apscheduler>=3.10.0  # Optional: for scheduled pipeline runs
 
 # PDF generation

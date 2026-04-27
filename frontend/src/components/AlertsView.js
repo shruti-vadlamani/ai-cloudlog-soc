@@ -11,6 +11,11 @@ function AlertsView() {
   const [pageSize] = useState(25);
   const [sortBy, setSortBy] = useState('ensemble_score');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [filterOptions, setFilterOptions] = useState({
+    users: [],
+    attack_types: [],
+    mitre_techniques: [],
+  });
   const [filters, setFilters] = useState({
     user_name: '',
     min_score: '',
@@ -29,6 +34,22 @@ function AlertsView() {
     });
     return qs.toString();
   }, [page, pageSize, sortBy, sortOrder, filters]);
+
+  // Fetch filter options on mount
+  useEffect(() => {
+    const fetchFilterOptions = async () => {
+      try {
+        const response = await fetch(apiUrl('/api/stats/filter-options'));
+        if (response.ok) {
+          const data = await response.json();
+          setFilterOptions(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch filter options:', err);
+      }
+    };
+    fetchFilterOptions();
+  }, []);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -85,11 +106,17 @@ function AlertsView() {
         <div className="filters-grid">
           <label className="field">
             <span>User</span>
-            <input
+            <select
               value={filters.user_name}
               onChange={(e) => setFilterValue('user_name', e.target.value)}
-              placeholder="e.g. bob-devops"
-            />
+            >
+              <option value="">All Users</option>
+              {filterOptions.users.map((user) => (
+                <option key={user} value={user}>
+                  {user}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="field">
@@ -107,11 +134,17 @@ function AlertsView() {
 
           <label className="field">
             <span>Attack Type</span>
-            <input
+            <select
               value={filters.attack_name}
               onChange={(e) => setFilterValue('attack_name', e.target.value)}
-              placeholder="insider_threat"
-            />
+            >
+              <option value="">All Attack Types</option>
+              {filterOptions.attack_types.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="field">

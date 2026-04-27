@@ -226,7 +226,24 @@ When set, `CORS_ORIGINS` overrides `backend/config.yaml` origins.
 
 ## Optional Services
 
-- **Neo4j** (for graph-based pattern matching): localhost:7687
-- **Ollama** (for LLM analysis): localhost:11434
+- **Neo4j** (for graph-based pattern matching): `neo4j+s://` (configured in `.env`)
+- **Google Cloud Vertex AI** (for LLM analysis via Gemini): Requires `GOOGLE_APPLICATION_CREDENTIALS`
 
 The backend will work without these services but with reduced enrichment capabilities.
+
+## LLM Integration
+
+### Previous: Ollama
+Previously used local Ollama for LLM synthesis. Ollama required manual setup and had reliability issues.
+
+### Current: Google Vertex AI (Gemini)
+Now uses Google Cloud's Vertex AI with Gemini models for superior quality and reliability.
+
+**Setup:** See [VERTEX_AI_SETUP.md](../VERTEX_AI_SETUP.md) for configuration instructions.
+
+**Features:**
+- No local LLM inference needed
+- Managed service with high availability
+- Better model quality (Gemini 1.5)
+- Graceful degradation if LLM unavailable
+

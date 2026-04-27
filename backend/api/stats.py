@@ -75,3 +75,44 @@ def get_attack_distribution(
     """Get distribution of attack types"""
     stats = alert_service.get_overview_stats()
     return stats.attack_types
+
+
+@router.get("/filter-options", response_model=dict)
+def get_filter_options(
+    alert_service: AlertService = Depends(get_alert_service),
+):
+    """
+    Get available options for filter dropdowns.
+    
+    Returns:
+    - attack_types: List of all attack types in the database
+    - mitre_techniques: List of all MITRE technique IDs
+    - users: List of all unique users
+    """
+    stats = alert_service.get_overview_stats()
+    attack_types = list(stats.attack_types.keys()) if stats.attack_types else []
+    
+    # Load MITRE techniques from knowledge base
+    import json
+    from pathlib import Path
+    mitre_techniques = []
+    try:
+        kb_path = Path(__file__).parent.parent.parent / "knowledge_base" / "mitre_techniques.json"
+        if kb_path.exists():
+            with open(kb_path, "r") as f:
+                techniques = json.load(f)
+                mitre_techniques = [
+                    {"id": t.get("technique_id"), "name": t.get("name")}
+                    for t in techniques
+                ]
+    except Exception as e:
+        print(f"Error loading MITRE techniques: {e}")
+    
+    # Get all unique users
+    users = alert_service.get_unique_users()
+    
+    return {
+        "attack_types": sorted(attack_types),
+        "mitre_techniques": mitre_techniques,
+        "users": sorted(users) if users else [],
+    }
