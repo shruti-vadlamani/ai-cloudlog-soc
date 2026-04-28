@@ -217,7 +217,7 @@ function KnowledgeGraphView() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(false);
   const [pulseSuspicious, setPulseSuspicious] = useState(false);
-  const [showEdgeLabels] = useState(true); // always show edge labels (Neo4j Bloom style)
+  //const [showEdgeLabels] = useState(true); // always show edge labels (Neo4j Bloom style)
   const [initialLimit, setInitialLimit] = useState(20);
   const [expandLimit, setExpandLimit] = useState(12);
   const [tracePath, setTracePath] = useState(null);
@@ -227,7 +227,7 @@ function KnowledgeGraphView() {
   const [queryInsights, setQueryInsights] = useState([]);
   const [queryExplanation, setQueryExplanation] = useState('');
 
-  const demoQueries = useMemo(() => ([
+  /*const demoQueries = useMemo(() => ([
     { label: 'Open T1078 credential compromise path', query: 'T1078' },
     { label: 'Unusual IAM role assumption', query: 'Unusual IAM Role Assumption' },
     { label: 'Privilege escalation by policy attachment', query: 'IOC-IAM-002' },
@@ -236,7 +236,7 @@ function KnowledgeGraphView() {
     { label: 'Access key persistence', query: 'Access Key Creation for Persistence' },
     { label: 'Reconnaissance via enumeration', query: 'Comprehensive Cloud Service Enumeration' },
     { label: 'Root account activity', query: 'IR-IAM-004' },
-  ]), []);
+  ]), []);*/
 
   const attackTypeOptions = useMemo(() => {
     const values = [
