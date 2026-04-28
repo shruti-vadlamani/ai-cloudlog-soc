@@ -128,3 +128,4 @@ incident_report_*.txt
 
 # Data results
 data/results/
+gcp-credentials.json

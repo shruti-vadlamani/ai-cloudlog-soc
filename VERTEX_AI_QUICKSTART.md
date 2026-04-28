@@ -23,9 +23,9 @@ Installs:
 
 ### Step 2: Verify GCP Setup
 
-Your `.env` already has:
+Your `.env` should have:
 ```dotenv
-GOOGLE_APPLICATION_CREDENTIALS=C:\Users\durga\OneDrive\Desktop\secrets\gcp-credentials.json
+GCP_CREDENTIALS='{"type":"service_account","project_id":"your-project-id",...}'
 ```
 
 **Verify** that your GCP service account has the `roles/aiplatform.user` role.
@@ -95,7 +95,7 @@ GCP_PROJECT_ID=ac4ec2d4
 WARNING: Vertex AI initialization failed
 ```
 **Check:**
-1. Is `GOOGLE_APPLICATION_CREDENTIALS` path correct?
+1. Is `GCP_CREDENTIALS` valid JSON?
 2. Does service account have `roles/aiplatform.user`?
 3. Is Vertex AI API enabled in GCP project?
 

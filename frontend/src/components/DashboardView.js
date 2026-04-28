@@ -66,13 +66,14 @@ function DashboardView() {
     .slice(0, 6)
     .map(([name, value]) => ({ name, value }));
 
-  const pieColors = ['#0f4c81', '#1864ab', '#3b82f6', '#1f2937', '#64748b', '#94a3b8'];
+  // Enterprise color palette - monochrome with minimal accents
+  const pieColors = ['#374151', '#4b5563', '#6b7280', '#9ca3af', '#bcc2c9', '#d1d5db'];
 
   return (
     <div className="page-stack">
       <section className="page-intro">
         <h2>Security Overview</h2>
-        <p>High-level operational health, alert distribution, and top impacted identities.</p>
+        <p>Operational health, alert distribution, and top impacted identities.</p>
       </section>
 
       <div className="stats-grid">
@@ -83,7 +84,7 @@ function DashboardView() {
         </div>
         
         <div className="stat-card">
-          <div className="stat-label">High Severity</div>
+          <div className="stat-label">Critical Severity</div>
           <div className="stat-value stat-critical">
             {stats?.high_severity_count || 0}
           </div>
@@ -91,15 +92,15 @@ function DashboardView() {
         </div>
         
         <div className="stat-card">
-          <div className="stat-label">Medium Severity</div>
-          <div className="stat-value stat-warning">
+          <div className="stat-label">High Severity</div>
+          <div className="stat-value stat-high">
             {stats?.medium_severity_count || 0}
           </div>
           <div className="stat-trend">Needs triage</div>
         </div>
         
         <div className="stat-card">
-          <div className="stat-label">Users Affected</div>
+          <div className="stat-label">Unique Users</div>
           <div className="stat-value stat-neutral">
             {stats?.unique_users_affected || 0}
           </div>
@@ -113,13 +114,16 @@ function DashboardView() {
             <h3 className="card-title">Top Affected Users</h3>
           </div>
           {topUsers.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={topUsers.slice(0, 8)} layout="vertical" margin={{ left: 24, right: 16, top: 12, bottom: 12 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
-                <XAxis type="number" stroke="#475569" />
-                <YAxis dataKey="user" type="category" width={130} stroke="#334155" />
-                <Tooltip />
-                <Bar dataKey="alert_count" fill="#0f4c81" radius={[0, 4, 4, 0]} />
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={topUsers.slice(0, 8)} layout="vertical" margin={{ left: 100, right: 16, top: 8, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="0" stroke="#e5e7eb" vertical={false} />
+                <XAxis type="number" stroke="#6b7280" style={{ fontSize: '12px' }} />
+                <YAxis dataKey="user" type="category" width={90} stroke="#6b7280" style={{ fontSize: '12px' }} />
+                <Tooltip 
+                  contentStyle={{ background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '6px' }}
+                  labelStyle={{ color: '#111827' }}
+                />
+                <Bar dataKey="alert_count" fill="#374151" radius={[0, 3, 3, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -129,17 +133,20 @@ function DashboardView() {
 
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Attack Distribution</h3>
+            <h3 className="card-title">Attack Type Distribution</h3>
           </div>
           {attackPieData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
+            <ResponsiveContainer width="100%" height={280}>
               <PieChart>
-                <Pie data={attackPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={84} label>
+                <Pie data={attackPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={{ fontSize: 12, fill: '#374151' }}>
                   {attackPieData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={pieColors[index % pieColors.length]} />
                   ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip 
+                  contentStyle={{ background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '6px' }}
+                  labelStyle={{ color: '#111827' }}
+                />
               </PieChart>
             </ResponsiveContainer>
           ) : (
@@ -153,13 +160,16 @@ function DashboardView() {
           <h3 className="card-title">Alert Volume Timeline</h3>
         </div>
         {timelineData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={300}>
             <BarChart data={timelineData} margin={{ left: 20, right: 20, top: 16, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
-              <XAxis dataKey="date" stroke="#475569" />
-              <YAxis stroke="#475569" />
-              <Tooltip />
-              <Bar dataKey="count" fill="#1d4f91" radius={[4, 4, 0, 0]} />
+              <CartesianGrid strokeDasharray="0" stroke="#e5e7eb" vertical={false} />
+              <XAxis dataKey="date" stroke="#6b7280" style={{ fontSize: '12px' }} />
+              <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} />
+              <Tooltip 
+                contentStyle={{ background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '6px' }}
+                labelStyle={{ color: '#111827' }}
+              />
+              <Bar dataKey="count" fill="#4b5563" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (

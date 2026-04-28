@@ -9,7 +9,7 @@ This guide explains how to set up Google Cloud Vertex AI with Gemini models for 
    ```
    gcloud services enable aiplatform.googleapis.com
    ```
-3. **Service Account with Vertex AI Permissions** — Your `GOOGLE_APPLICATION_CREDENTIALS` should point to a service account JSON file with these roles:
+3. **Service Account with Vertex AI Permissions** — Your `GCP_CREDENTIALS` should contain a service account JSON payload with these roles:
    - `roles/aiplatform.user` (Vertex AI User)
    - Or `roles/editor` for broad access
 
@@ -29,17 +29,17 @@ This installs:
 
 ### 2. Set Up Google Cloud Credentials
 
-The backend uses the `GOOGLE_APPLICATION_CREDENTIALS` environment variable that's already configured in your `.env` file:
+The backend reads credentials from `GCP_CREDENTIALS` in `.env` and parses it as JSON.
 
 ```dotenv
-GOOGLE_APPLICATION_CREDENTIALS=C:\Users\durga\OneDrive\Desktop\secrets\gcp-credentials.json
+GCP_CREDENTIALS='{"type":"service_account","project_id":"your-project-id",...}'
 ```
 
-**Make sure your GCP service account JSON file has Vertex AI permissions.**
+**Make sure this JSON payload is a valid service account key with Vertex AI permissions.**
 
 ### 3. Extract Project ID (Optional but Recommended)
 
-The Vertex AI client will automatically detect your project ID from the credentials file. However, you can also explicitly set it:
+The Vertex AI client will automatically detect your project ID from `GCP_CREDENTIALS`. You can also explicitly set it:
 
 ```dotenv
 GCP_PROJECT_ID=your-project-id
@@ -50,7 +50,7 @@ GCP_PROJECT_ID=your-project-id
 ### Initialization Flow
 
 1. **RAGService starts** — During `_init_rag()`, it calls `get_vertex_ai_client()`
-2. **VertexAIClient initializes** — Loads credentials from `GOOGLE_APPLICATION_CREDENTIALS`
+2. **VertexAIClient initializes** — Loads credentials from `GCP_CREDENTIALS`
 3. **Gemini Model loaded** — The `gemini-1.5-pro` model is instantiated
 4. **LLM enabled** — RAG queries with `use_llm=true` now use Gemini instead of Ollama
 
@@ -98,12 +98,12 @@ Returns only ChromaDB search results, no LLM synthesis.
 GCP_PROJECT_ID=your-gcp-project-id
 ```
 
-Or ensure your credentials file has proper project metadata.
+Or ensure your `GCP_CREDENTIALS` payload has proper project metadata.
 
 ### "Vertex AI initialization failed" Warning
 
 **Check:**
-1. Is `GOOGLE_APPLICATION_CREDENTIALS` pointing to a valid JSON file?
+1. Is `GCP_CREDENTIALS` set and valid JSON?
 2. Does the service account have `roles/aiplatform.user` permission?
 3. Is the Vertex AI API enabled in your GCP project?
 

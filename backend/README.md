@@ -227,7 +227,7 @@ When set, `CORS_ORIGINS` overrides `backend/config.yaml` origins.
 ## Optional Services
 
 - **Neo4j** (for graph-based pattern matching): `neo4j+s://` (configured in `.env`)
-- **Google Cloud Vertex AI** (for LLM analysis via Gemini): Requires `GOOGLE_APPLICATION_CREDENTIALS`
+- **Google Cloud Vertex AI** (for LLM analysis via Gemini): Requires `GCP_CREDENTIALS` (service account JSON in env)
 
 The backend will work without these services but with reduced enrichment capabilities.
 

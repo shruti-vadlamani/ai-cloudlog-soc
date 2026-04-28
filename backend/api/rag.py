@@ -171,6 +171,57 @@ def _match_context(label: str, props: dict) -> str:
     return "related entity"
 
 
+def _graph_match_score(query: str, match: dict) -> int:
+    q = (query or "").strip().lower()
+    if not q:
+        return 0
+
+    props = match.get("properties", {}) or {}
+    text_candidates = [
+        str(match.get("id", "")),
+        str(match.get("key", "")),
+        str(match.get("label", "")),
+        str(match.get("type", "")),
+        str(props.get("technique_id", "")),
+        str(props.get("pattern_id", "")),
+        str(props.get("playbook_id", "")),
+        str(props.get("id", "")),
+        str(props.get("name", "")),
+        str(props.get("attack_name", "")),
+        str(props.get("window_id", "")),
+        str(props.get("user_name", "")),
+        str(props.get("description", "")),
+    ]
+    normalized_candidates = [value.strip().lower() for value in text_candidates if value]
+
+    type_priority = {
+        "MITRETechnique": 500,
+        "DetectionPattern": 400,
+        "Playbook": 300,
+        "Window": 200,
+        "User": 100,
+    }.get(match.get("type"), 0)
+
+    if q in normalized_candidates:
+        return 1000 + type_priority
+
+    score = type_priority
+    if any(candidate == q for candidate in normalized_candidates):
+        score += 250
+    if any(q in candidate for candidate in normalized_candidates):
+        score += 75
+
+    token_hits = 0
+    for token in q.split():
+        if len(token) < 2:
+            continue
+        if any(token in candidate for candidate in normalized_candidates):
+            token_hits += 1
+    score += token_hits * 20
+
+    return score
+
+
 @router.get("/graph/subgraph", response_model=dict)
 def get_graph_subgraph(
     attack_type: str = Query("", description="Filter by attack_name from Window nodes"),
@@ -418,6 +469,8 @@ def query_graph_insights(
                 log.warning("No nodes found even in fallback query")
 
         matched_values = list(matches.values())
+        matched_values.sort(key=lambda item: _graph_match_score(query, item), reverse=True)
+        focus_match = matched_values[0] if matched_values else None
         type_counts = {}
         for item in matched_values:
             t = item.get("type", "Unknown")
@@ -473,6 +526,7 @@ def query_graph_insights(
             "summary": summary,
             "insights": insights,
             "matches": matched_values[:12],
+            "focus_match": focus_match,
             "nodes": list(nodes.values()),
             "edges": list(edges.values()),
             "explanation": explanation,  # LLM-synthesized explanation

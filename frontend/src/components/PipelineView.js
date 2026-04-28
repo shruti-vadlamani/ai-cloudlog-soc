@@ -143,73 +143,88 @@ function PipelineView() {
         </div>
         <div className="stat-card">
           <div className="stat-label">Attack Rate</div>
-          <div className="stat-value stat-warning">{datasetStats.attackRate.toFixed(1)}%</div>
+          <div className="stat-value stat-high">{datasetStats.attackRate.toFixed(1)}%</div>
           <div className="stat-trend">Ground-truth flagged attacks</div>
         </div>
       </div>
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">14-Day Anomaly Score Timeline</h3>
+          <h3 className="card-title">Alert Score Timeline</h3>
         </div>
-        <div className="chart-area">
-          {timelineData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={timelineData} margin={{ top: 20, right: 24, left: 12, bottom: 14 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
-                <XAxis dataKey="window" tick={{ fontSize: 11 }} stroke="#475569" />
-                <YAxis domain={[0, 1]} stroke="#475569" />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="score" stroke="#123f73" strokeWidth={2} dot={false} name="Anomaly score" />
-                <Scatter dataKey="attackScore" fill="#b91c1c" name="Attack windows" />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="empty-note">No timeline points loaded. Check API base URL and backend /api/alerts response.</p>
-          )}
-        </div>
+        {timelineData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={timelineData} margin={{ left: 20, right: 20, top: 16, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="0" stroke="#e5e7eb" vertical={false} />
+              <XAxis 
+                dataKey="window" 
+                stroke="#6b7280" 
+                style={{ fontSize: '12px' }}
+                interval={Math.floor(timelineData.length / 10)}
+              />
+              <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} />
+              <Tooltip 
+                contentStyle={{ background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '6px' }}
+                labelStyle={{ color: '#111827' }}
+              />
+              <Legend wrapperStyle={{ fontSize: '12px' }} />
+              <Line 
+                type="monotone" 
+                dataKey="score" 
+                stroke="#4b5563" 
+                dot={false}
+                name="Anomaly Score"
+                strokeWidth={2}
+                isAnimationActive={false}
+              />
+              <Scatter 
+                dataKey="attackScore" 
+                fill="#dc2626"
+                name="Flagged Attack"
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="empty-note">No timeline data available.</p>
+        )}
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Latest Pipeline Runs</h3>
-        </div>
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Completed</th>
-                <th>Events Ingested</th>
-                <th>Alerts Generated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.length > 0 ? history.map((run) => (
-                <tr key={run.run_id}>
-                  <td>{run.run_id}</td>
-                  <td>
-                    <span className={`badge ${run.status === 'success' ? 'badge-success' : run.status === 'failed' ? 'badge-high' : 'badge-low'}`}>
-                      {run.status}
-                    </span>
-                  </td>
-                  <td>{run.started_at ? new Date(run.started_at).toLocaleString() : '-'}</td>
-                  <td>{run.completed_at ? new Date(run.completed_at).toLocaleString() : '-'}</td>
-                  <td>{(run.events_ingested || 0).toLocaleString()}</td>
-                  <td>{(run.alerts_generated || 0).toLocaleString()}</td>
-                </tr>
-              )) : (
+      {history.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Recent Pipeline Runs</h3>
+          </div>
+          <div className="table-container">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan="6" className="empty-note">No pipeline runs yet.</td>
+                  <th>Start Time</th>
+                  <th>Duration</th>
+                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Records Processed</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {history.map((run, idx) => (
+                  <tr key={idx}>
+                    <td>{new Date(run.start_time || run.started).toLocaleString()}</td>
+                    <td>{run.duration_seconds || run.duration ? `${(run.duration_seconds || run.duration).toFixed(1)}s` : '-'}</td>
+                    <td>{run.stages && Array.isArray(run.stages) ? run.stages.join(', ') : run.current_stage || '-'}</td>
+                    <td>
+                      <span className={`badge ${run.status === 'completed' ? 'badge-success' : run.status === 'failed' ? 'badge-critical' : 'badge-info'}`}>
+                        {run.status || 'unknown'}
+                      </span>
+                    </td>
+                    <td>{run.records_processed?.toLocaleString() || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

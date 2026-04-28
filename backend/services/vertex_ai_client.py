@@ -4,7 +4,7 @@ backend/services/vertex_ai_client.py
 Google Vertex AI (Gemini) LLM service for RAG synthesis.
 
 This service replaces Ollama with Google Cloud's Gemini models.
-Authentication is handled via GOOGLE_APPLICATION_CREDENTIALS environment variable.
+Authentication is handled via GCP_CREDENTIALS environment variable (JSON service account payload).
 
 Usage:
     client = VertexAIClient()
@@ -13,6 +13,7 @@ Usage:
 
 import logging
 import os
+import json
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -53,21 +54,44 @@ class VertexAIClient:
         try:
             from google.cloud import aiplatform
             from google.auth import default
+            from google.oauth2 import service_account
+
+            credentials = None
+            credentials_project_id = None
+
+            # Parse service account JSON payload from env (Python equivalent of JSON.parse)
+            raw_gcp_credentials = os.getenv("GCP_CREDENTIALS", "").strip()
+            if raw_gcp_credentials:
+                try:
+                    service_account_info = json.loads(raw_gcp_credentials)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid GCP_CREDENTIALS JSON: {exc}") from exc
+
+                credentials = service_account.Credentials.from_service_account_info(
+                    service_account_info,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                credentials_project_id = service_account_info.get("project_id")
             
             # Get project ID
             if not self.project_id:
                 try:
-                    _, self.project_id = default()
-                    if isinstance(self.project_id, str):
-                        log.info(f"Project ID from credentials: {self.project_id}")
+                    if credentials_project_id:
+                        self.project_id = credentials_project_id
+                        log.info(f"Project ID from GCP_CREDENTIALS: {self.project_id}")
                     else:
-                        # If it's not a string, try getting it from environment
-                        self.project_id = os.getenv("GCP_PROJECT_ID")
-                        if not self.project_id:
-                            raise ValueError(
-                                "Could not determine project ID. "
-                                "Set GCP_PROJECT_ID environment variable or pass project_id parameter."
-                            )
+                        _, discovered_project_id = default()
+                        if isinstance(discovered_project_id, str):
+                            self.project_id = discovered_project_id
+                            log.info(f"Project ID from default credentials: {self.project_id}")
+                        else:
+                            # If it's not a string, try getting it from environment
+                            self.project_id = os.getenv("GCP_PROJECT_ID")
+                            if not self.project_id:
+                                raise ValueError(
+                                    "Could not determine project ID. "
+                                    "Set GCP_PROJECT_ID environment variable or pass project_id parameter."
+                                )
                 except Exception as e:
                     self.project_id = os.getenv("GCP_PROJECT_ID")
                     if not self.project_id:
@@ -80,6 +104,7 @@ class VertexAIClient:
             aiplatform.init(
                 project=self.project_id,
                 location=self.location,
+                credentials=credentials,
             )
             
             # Get generative model
