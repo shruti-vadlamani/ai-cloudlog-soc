@@ -171,57 +171,6 @@ def _match_context(label: str, props: dict) -> str:
     return "related entity"
 
 
-def _graph_match_score(query: str, match: dict) -> int:
-    q = (query or "").strip().lower()
-    if not q:
-        return 0
-
-    props = match.get("properties", {}) or {}
-    text_candidates = [
-        str(match.get("id", "")),
-        str(match.get("key", "")),
-        str(match.get("label", "")),
-        str(match.get("type", "")),
-        str(props.get("technique_id", "")),
-        str(props.get("pattern_id", "")),
-        str(props.get("playbook_id", "")),
-        str(props.get("id", "")),
-        str(props.get("name", "")),
-        str(props.get("attack_name", "")),
-        str(props.get("window_id", "")),
-        str(props.get("user_name", "")),
-        str(props.get("description", "")),
-    ]
-    normalized_candidates = [value.strip().lower() for value in text_candidates if value]
-
-    type_priority = {
-        "MITRETechnique": 500,
-        "DetectionPattern": 400,
-        "Playbook": 300,
-        "Window": 200,
-        "User": 100,
-    }.get(match.get("type"), 0)
-
-    if q in normalized_candidates:
-        return 1000 + type_priority
-
-    score = type_priority
-    if any(candidate == q for candidate in normalized_candidates):
-        score += 250
-    if any(q in candidate for candidate in normalized_candidates):
-        score += 75
-
-    token_hits = 0
-    for token in q.split():
-        if len(token) < 2:
-            continue
-        if any(token in candidate for candidate in normalized_candidates):
-            token_hits += 1
-    score += token_hits * 20
-
-    return score
-
-
 @router.get("/graph/subgraph", response_model=dict)
 def get_graph_subgraph(
     attack_type: str = Query("", description="Filter by attack_name from Window nodes"),
@@ -326,210 +275,263 @@ def expand_graph_node(
 def query_graph_insights(
     query: str = Body(..., embed=True, min_length=2),
     limit: int = Body(25, embed=True, ge=5, le=80),
-    rag_service: RAGService = Depends(get_rag_service),
 ):
     """
-    Search graph with natural language and return graph + LLM explanation.
-    
-    Returns:
-    - Graph nodes and edges for visualization
-    - LLM-synthesized explanation about what was found
-    - Specific matches if available
+    Search the knowledge graph using keyword matching and return a focused subgraph.
+
+    Phase 1: keyword-match candidate nodes (no LLM).
+    Phase 2: pick the single best-matching node as the focus, then expand
+             only its 1-hop neighborhood — exactly like Neo4j Desktop.
+
+    Returns focus_match so the frontend can select/highlight the node.
     """
-    import logging
     log = logging.getLogger("rag_graph_query")
-    
+
     q = query.strip().lower()
     if not q:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    # Extract meaningful keywords from query (remove stop words)
-    stop_words = {'what', 'is', 'the', 'a', 'an', 'are', 'and', 'or', 'of', 'in', 'on', 'at', 'how', 'why', 'when', 'where', 'can', 'i', 'you', 'we', 'they', 'about', 'show', 'tell', 'find'}
-    keywords = [w for w in q.split() if w not in stop_words and len(w) > 2]
-    
-    # Synonym mapping for better matching
-    synonym_map = {
-        'mitre': ['technique', 'att&ck', 'tactic'],
-        'alert': ['detection', 'anomaly', 'window'],
-        'user': ['identity', 'account', 'principal'],
-        'privilege': ['escalation', 'permission', 'access'],
-        'attack': ['technique', 'pattern', 'threat'],
-        'playbook': ['response', 'procedure', 'runbook'],
-        'threat': ['attack', 'incident', 'pattern'],
+    # ── keyword extraction (remove stop words) ──────────────────────────────
+    stop_words = {
+        'what', 'is', 'the', 'a', 'an', 'are', 'and', 'or', 'of', 'in', 'on', 'at',
+        'how', 'why', 'when', 'where', 'can', 'i', 'you', 'we', 'they', 'about',
+        'show', 'tell', 'find', 'me', 'for', 'to', 'with', 'from', 'by', 'this',
+        'that', 'these', 'those', 'it', 'as',
     }
-    
+    keywords = [w for w in q.split() if w not in stop_words and len(w) > 2]
+
+    synonym_map = {
+        'mitre':     ['technique', 'att&ck', 'tactic'],
+        'alert':     ['detection', 'anomaly', 'window'],
+        'user':      ['identity', 'account', 'principal'],
+        'privilege': ['escalation', 'permission', 'access'],
+        'attack':    ['technique', 'pattern', 'threat'],
+        'playbook':  ['response', 'procedure', 'runbook'],
+        'threat':    ['attack', 'incident', 'pattern'],
+    }
     expanded_keywords = set(keywords)
-    for keyword in keywords:
-        if keyword in synonym_map:
-            expanded_keywords.update(synonym_map[keyword])
-    
-    log.info(f"Query keywords: {keywords}, Expanded: {expanded_keywords}")
+    for kw in keywords:
+        expanded_keywords.update(synonym_map.get(kw, []))
+
+    log.info(f"Graph query '{query}' → keywords={keywords} expanded={expanded_keywords}")
+
+    # ── candidate limit: keep small so Cypher LIMIT is always a plain integer ─
+    candidate_limit = max(5, min(limit, 30))       # plain int — valid Cypher
+    neighbor_limit  = max(30, min(limit * 4, 120)) # plain int — valid Cypher
 
     driver, session = _graph_session()
     try:
-        # First try: enhanced keyword match with multiple term matching
-        log.info(f"Running keyword query for: {query}")
-        rows = list(session.run(
+        # ── PHASE 1: find candidate nodes that match the keyword ─────────────
+        log.info(f"Phase 1: keyword candidate search (limit={candidate_limit})")
+        candidate_rows = list(session.run(
             """
             MATCH (n)
-            WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
+            WHERE any(lbl IN labels(n) WHERE lbl IN
+                  ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
               AND (
-                toLower(coalesce(n.name, '')) CONTAINS $q
-                OR toLower(coalesce(n.id, '')) CONTAINS $q
+                toLower(coalesce(n.name,        '')) CONTAINS $q
+                OR toLower(coalesce(n.id,          '')) CONTAINS $q
                 OR toLower(coalesce(n.technique_id, '')) CONTAINS $q
-                OR toLower(coalesce(n.attack_name, '')) CONTAINS $q
-                OR toLower(coalesce(n.window_id, '')) CONTAINS $q
-                OR toLower(coalesce(n.user_name, '')) CONTAINS $q
-                OR toLower(coalesce(n.description, '')) CONTAINS $q
-                OR any(keyword IN $expanded_keywords WHERE toLower(coalesce(n.name, '') + ' ' + coalesce(n.description, '')) CONTAINS keyword)
+                OR toLower(coalesce(n.attack_name,  '')) CONTAINS $q
+                OR toLower(coalesce(n.window_id,    '')) CONTAINS $q
+                OR toLower(coalesce(n.user_name,    '')) CONTAINS $q
+                OR toLower(coalesce(n.description,  '')) CONTAINS $q
+                OR any(kw IN $expanded_keywords
+                       WHERE toLower(coalesce(n.name, '') + ' ' + coalesce(n.description, ''))
+                             CONTAINS kw)
               )
-            WITH n
-            LIMIT $limit
-            OPTIONAL MATCH (n)-[r]-(m)
-            RETURN n, m, r, startNode(r) as r_src, endNode(r) as r_dst
-            LIMIT $limit * 8
+            RETURN n
+            LIMIT $candidate_limit
             """,
             q=q,
             expanded_keywords=list(expanded_keywords),
-            limit=limit,
+            candidate_limit=candidate_limit,
         ))
-        
-        log.info(f"Keyword query returned {len(rows)} rows")
+        log.info(f"Phase 1 returned {len(candidate_rows)} candidates")
 
-        nodes = {}
-        edges = {}
-        matches = {}
+        # ── score each candidate and pick the best focus node ────────────────
+        def _score(payload: dict) -> int:
+            """Simple keyword relevance score — higher is better."""
+            props = payload.get("properties", {})
+            text_fields = [
+                str(payload.get("key", "")),
+                str(payload.get("label", "")),
+                str(props.get("name", "")),
+                str(props.get("technique_id", "")),
+                str(props.get("attack_name", "")),
+                str(props.get("id", "")),
+                str(props.get("description", "")),
+            ]
+            combined = " ".join(text_fields).lower()
+            # Type priority: more specific types rank higher
+            type_bonus = {
+                "MITRETechnique": 500, "DetectionPattern": 400,
+                "Playbook": 300, "Window": 200, "User": 100,
+            }.get(payload.get("type", ""), 0)
+            # Exact full-query match
+            if q in combined:
+                return 1000 + type_bonus
+            # Keyword token hits
+            score = type_bonus
+            for token in q.split():
+                if len(token) >= 2 and token in combined:
+                    score += 60
+            return score
 
-        for rec in rows:
+        candidates = []
+        for rec in candidate_rows:
             n = rec.get("n")
-            m = rec.get("m")
+            if n is None:
+                continue
+            payload = _serialize_node(n)
+            if payload:
+                candidates.append(payload)
 
-            _add_node(nodes, n)
-            _add_node(nodes, m)
-            _add_edge(edges, rec.get("r"), rec.get("r_src"), rec.get("r_dst"))
+        # Rank and pick the single best focus node
+        candidates.sort(key=_score, reverse=True)
+        focus_node_payload = candidates[0] if candidates else None
 
-            if n is not None:
-                n_payload = _serialize_node(n)
-                if n_payload:
-                    matches[n_payload["id"]] = {
-                        "id": n_payload["id"],
-                        "type": n_payload["type"],
-                        "key": n_payload["key"],
-                        "label": n_payload["label"],
-                        "context": _match_context(n_payload["type"], n_payload.get("properties", {})),
-                    }
-        
-        log.info(f"Matched {len(matches)} entities from keyword query")
-        
-        # If no direct matches, try broader traversal for natural language queries
-        if not matches:
-            log.info("No keyword matches found, trying fallback to knowledge graph overview")
-            # Get ALL key entity types (not just limited sample)
-            all_nodes_result = session.run(
+        nodes: dict = {}
+        edges: dict = {}
+        matches: list = []
+
+        if focus_node_payload:
+            # ── PHASE 2: expand ONLY the focus node's 1-hop neighborhood ────
+            focus_type = focus_node_payload["type"]
+            focus_props = focus_node_payload.get("properties", {})
+
+            label_map = {
+                "User":             ("User",             "name"),
+                "Window":           ("Window",           "window_id"),
+                "DetectionPattern": ("DetectionPattern", "id"),
+                "MITRETechnique":   ("MITRETechnique",   "technique_id"),
+                "Playbook":         ("Playbook",         "id"),
+            }
+            label, key_prop = label_map.get(focus_type, (focus_type, "id"))
+            key_value = focus_props.get(key_prop) or focus_props.get("id") or focus_props.get("name")
+
+            log.info(f"Phase 2: expanding focus node {focus_type}:{key_value} (limit={neighbor_limit})")
+
+            if key_value:
+                focus_rows = list(session.run(
+                    f"""
+                    MATCH (n:{label} {{{key_prop}: $key_value}})-[r]-(m)
+                    RETURN n, m, r, startNode(r) as r_src, endNode(r) as r_dst
+                    LIMIT $neighbor_limit
+                    """,
+                    key_value=key_value,
+                    neighbor_limit=neighbor_limit,
+                ))
+                log.info(f"Phase 2 returned {len(focus_rows)} neighbor rows")
+
+                for rec in focus_rows:
+                    _add_node(nodes, rec.get("n"))
+                    _add_node(nodes, rec.get("m"))
+                    _add_edge(edges, rec.get("r"), rec.get("r_src"), rec.get("r_dst"))
+
+            # Build matches list from all candidates (for sidebar display)
+            for c in candidates:
+                matches.append({
+                    "id":      c["id"],
+                    "type":    c["type"],
+                    "key":     c["key"],
+                    "label":   c["label"],
+                    "context": _match_context(c["type"], c.get("properties", {})),
+                })
+
+        else:
+            # ── FALLBACK: no keyword match → overview of first 50 nodes ─────
+            log.info("No keyword match — falling back to overview graph")
+            overview_rows = list(session.run(
                 """
                 MATCH (n)
-                WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
+                WHERE any(lbl IN labels(n) WHERE lbl IN
+                      ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
                 RETURN n
                 LIMIT 50
                 """
-            )
-            
-            sample_rows = list(all_nodes_result)
-            log.info(f"Retrieved {len(sample_rows)} sample nodes from knowledge graph")
-            
-            if sample_rows:
-                # Add all sample nodes
-                for rec in sample_rows:
-                    n = rec.get("n")
-                    if n:
-                        _add_node(nodes, n)
-                        log.debug(f"Added node: {n.get('name', n.get('id', 'unknown'))}")
-                
-                # Get some edges connecting them
-                neighbors_result = session.run(
-                    """
-                    MATCH (n)-[r]-(m)
-                    WHERE any(lbl IN labels(n) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
-                      AND any(lbl IN labels(m) WHERE lbl IN ['User','Window','DetectionPattern','MITRETechnique','Playbook','Technique','TechniqueNode'])
-                    RETURN n, r, m
-                    LIMIT 100
-                    """
-                )
-                
-                for nbr_rec in neighbors_result:
-                    n = nbr_rec.get("n")
-                    m = nbr_rec.get("m")
-                    r = nbr_rec.get("r")
-                    _add_node(nodes, n)
-                    _add_node(nodes, m)
-                    _add_edge(edges, r, n, m)
-                
-                log.info(f"Added {len(edges)} edges from fallback query")
-            else:
-                log.warning("No nodes found even in fallback query")
+            ))
+            for rec in overview_rows:
+                _add_node(nodes, rec.get("n"))
 
-        matched_values = list(matches.values())
-        matched_values.sort(key=lambda item: _graph_match_score(query, item), reverse=True)
-        focus_match = matched_values[0] if matched_values else None
-        type_counts = {}
-        for item in matched_values:
-            t = item.get("type", "Unknown")
+            edge_rows = list(session.run(
+                """
+                MATCH (n)-[r]-(m)
+                WHERE any(lbl IN labels(n) WHERE lbl IN
+                      ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                  AND any(lbl IN labels(m) WHERE lbl IN
+                      ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                RETURN n, r, m
+                LIMIT 100
+                """
+            ))
+            for rec in edge_rows:
+                _add_node(nodes, rec.get("n"))
+                _add_node(nodes, rec.get("m"))
+                _add_edge(edges, rec.get("r"), rec.get("n"), rec.get("m"))
+
+        # ── build response metadata ──────────────────────────────────────────
+        focus_match = {
+            "id":      focus_node_payload["id"],
+            "type":    focus_node_payload["type"],
+            "key":     focus_node_payload["key"],
+            "label":   focus_node_payload["label"],
+            "context": _match_context(focus_node_payload["type"],
+                                      focus_node_payload.get("properties", {})),
+        } if focus_node_payload else None
+
+        type_counts: dict = {}
+        for m in matches:
+            t = m.get("type", "Unknown")
             type_counts[t] = type_counts.get(t, 0) + 1
-
         dominant = sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-        dominant_text = ", ".join([f"{k} ({v})" for k, v in dominant]) if dominant else "no dominant type"
+        dominant_text = ", ".join(f"{k} ({v})" for k, v in dominant) if dominant else "none"
 
-        # Determine summary message
-        if matched_values:
+        if matches:
             summary = (
-                f"Found {len(matched_values)} relevant entities and {len(edges)} relationships for '{query}'. "
-                f"Most matches: {dominant_text}."
+                f"Found {len(matches)} relevant entities for '{query}'. "
+                f"Showing 1-hop neighborhood of best match: {focus_match['label']} ({focus_match['type']}). "
+                f"Dominant types: {dominant_text}."
             )
         elif nodes:
             summary = (
-                f"No specific matches for '{query}', showing knowledge graph overview "
-                f"with {len(nodes)} entities and {len(edges)} relationships."
+                f"No specific match for '{query}'. "
+                f"Showing overview graph with {len(nodes)} entities."
             )
         else:
             summary = (
-                f"No graph entities matched '{query}'. Try technique IDs, attack names, user names, or playbook IDs."
+                f"No graph entities matched '{query}'. "
+                f"Try technique IDs (e.g. T1078), attack names, user names, or playbook IDs."
             )
 
         insights = []
-        if matched_values:
-            top_windows = [m for m in matched_values if m.get("type") == "Window"]
-            top_patterns = [m for m in matched_values if m.get("type") == "DetectionPattern"]
-            top_techniques = [m for m in matched_values if m.get("type") == "MITRETechnique"]
+        if matches:
+            top_windows    = [m for m in matches if m.get("type") == "Window"]
+            top_patterns   = [m for m in matches if m.get("type") == "DetectionPattern"]
+            top_techniques = [m for m in matches if m.get("type") == "MITRETechnique"]
             if top_windows:
-                insights.append(
-                    f"{len(top_windows)} suspicious windows matched. Inspect their linked patterns and playbooks first."
-                )
+                insights.append(f"{len(top_windows)} suspicious window(s) matched. Inspect linked patterns and playbooks.")
             if top_patterns:
-                insights.append(
-                    f"{len(top_patterns)} detection patterns matched. Validate thresholds and false-positive sources."
-                )
+                insights.append(f"{len(top_patterns)} detection pattern(s) matched. Validate thresholds.")
             if top_techniques:
-                ids = ", ".join([x.get("key", "") for x in top_techniques[:4]])
-                insights.append(f"Mapped ATT&CK techniques include: {ids}.")
-            insights.append("Click a matched node to open analyst guidance and route trace in the side panel.")
-        else:
-            if len(nodes) > 0:
-                insights.append(f"Showing {len(nodes)} entities from the knowledge graph.")
-                insights.append("Hover over nodes to inspect details. Double-click to expand neighbors.")
-        
-        # Generate LLM explanation about the graph findings
-        explanation = _generate_graph_explanation(query, nodes, edges, matched_values, rag_service)
+                ids = ", ".join(x.get("key", "") for x in top_techniques[:4])
+                insights.append(f"Mapped ATT&CK techniques: {ids}.")
+            insights.append("Click a node to view analyst details. Double-click to expand its neighbors.")
+        elif nodes:
+            insights.append(f"Showing {len(nodes)} entities from the knowledge graph.")
+            insights.append("Enter a keyword, technique ID, or attack name to focus the view.")
 
-        log.info(f"Returning {len(nodes)} nodes and {len(edges)} edges")
-        
+        log.info(f"Returning focus={focus_match['id'] if focus_match else None}, "
+                 f"{len(nodes)} nodes, {len(edges)} edges")
+
         return {
-            "summary": summary,
-            "insights": insights,
-            "matches": matched_values[:12],
+            "summary":     summary,
+            "insights":    insights,
+            "matches":     matches[:12],
             "focus_match": focus_match,
-            "nodes": list(nodes.values()),
-            "edges": list(edges.values()),
-            "explanation": explanation,  # LLM-synthesized explanation
+            "nodes":       list(nodes.values()),
+            "edges":       list(edges.values()),
+            "explanation": None,
         }
     except Exception as e:
         log.error(f"Graph query failed: {e}", exc_info=True)
@@ -537,154 +539,6 @@ def query_graph_insights(
     finally:
         session.close()
         driver.close()
-
-
-def _generate_graph_explanation(query: str, nodes: dict, edges: dict, matches: list, rag_service: RAGService) -> Optional[str]:
-    """
-    Use Vertex AI (Gemini) to generate a structured SOC analyst response about graph findings.
-    """
-    if not rag_service.llm_handler:
-        return None
-    
-    try:
-        # Build comprehensive context from the graph
-        node_summary = _summarize_nodes(nodes)
-        edge_summary = _summarize_edges(edges)
-        match_summary = _summarize_matches(matches) if matches else "No specific entity matches."
-        
-        # Build detailed node context with properties and relationships
-        detailed_nodes = []
-        for node_id, node_data in list(nodes.items())[:10]:  # Top 10 nodes
-            node_type = node_data.get("type", "Unknown")
-            node_name = node_data.get("label", node_data.get("key", node_id))
-            node_props = node_data.get("properties", {})
-            detailed_nodes.append(f"  - {node_name} ({node_type}): {str(node_props)[:200]}")
-        
-        detailed_nodes_text = "\n".join(detailed_nodes) if detailed_nodes else "  No detailed node information available"
-        
-        # Build edge context showing relationships
-        edge_details = []
-        for edge_data in list(edges.values())[:15]:  # Top 15 edges
-            edge_type = edge_data.get("label", "relates_to")
-            source = edge_data.get("source_label", "Unknown")
-            target = edge_data.get("target_label", "Unknown")
-            edge_details.append(f"  - {source} --[{edge_type}]--> {target}")
-        
-        edges_text = "\n".join(edge_details) if edge_details else "  No relationship details available"
-        
-        soc_system_prompt = """You are an expert AWS Cloud Security Operations Center (SOC) analyst with deep expertise in:
-- AWS CloudTrail log analysis and event pattern recognition
-- MITRE ATT&CK framework (techniques, tactics, procedures)
-- IAM privilege escalation, lateral movement, and data exfiltration patterns
-- Anomaly detection models and alert correlation
-- Incident response procedures and AWS-specific containment actions
-- Threat intelligence correlation
-
-You are analyzing a knowledge graph query to help security analysts investigate potential threats.
-Answer ONLY using the provided graph context. Be specific, technical, and immediately actionable."""
-
-        context = f"""KNOWLEDGE GRAPH ANALYSIS:
-        
-Matched Entities: {match_summary}
-
-Entity Types Found:
-{node_summary}
-
-Key Relationships:
-{edge_summary}
-
-Detailed Entities (top 10):
-{detailed_nodes_text}
-
-Relationship Details (top 15):
-{edges_text}"""
-
-        prompt = f"""{soc_system_prompt}
-
-{context}
-
-ANALYST QUESTION: {query}
-
-REQUIRED RESPONSE FORMAT (fill all sections):
-
-### Key Findings
-[What the graph shows about the question - 2-3 sentences]
-
-### Entity Analysis
-[List matched entity types and their relevance - use bullet points]
-
-### Relationship Patterns
-[Describe key relationships visible in the graph and security implications]
-
-### MITRE ATT&CK Mapping
-[If techniques are found, list technique IDs and tactics - otherwise state "Not directly applicable"]
-
-### CloudTrail Detection Signals
-[AWS API calls or events to monitor based on this graph pattern]
-
-### Risk Assessment
-Severity: [CRITICAL | HIGH | MEDIUM | LOW]
-Blast Radius: [Potential impact if this pattern is malicious]
-
-### Immediate Next Steps
-1. [First action for analyst]
-2. [Second action for analyst]
-3. [Third action for analyst]
-
-Be concise and specific - no generic statements."""
-
-        log.info(f"Graph explanation: using {len(nodes)} nodes, {len(edges)} edges, {len(matches)} matches")
-
-        explanation = rag_service.llm_handler.generate_text_sync(
-            prompt=prompt,
-            temperature=0.2,  # Deterministic for consistency
-            max_tokens=3000,  # Increased to ensure complete response without truncation
-            top_p=0.9,
-        )
-        return explanation if explanation else None
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Graph explanation generation failed: {e}")
-        return None
-
-
-def _summarize_nodes(nodes: dict) -> str:
-    """Create a summary of node types in the graph."""
-    type_counts = {}
-    for node in nodes.values():
-        t = node.get("type", "Unknown")
-        type_counts[t] = type_counts.get(t, 0) + 1
-    
-    if not type_counts:
-        return "No entities"
-    
-    return ", ".join([f"{k} ({v})" for k, v in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)])
-
-
-def _summarize_edges(edges: dict) -> str:
-    """Create a summary of edge types in the graph."""
-    edge_types = {}
-    for edge in edges.values():
-        t = edge.get("type", "UNKNOWN")
-        edge_types[t] = edge_types.get(t, 0) + 1
-    
-    if not edge_types:
-        return "No relationships"
-    
-    return ", ".join([f"{k} ({v})" for k, v in sorted(edge_types.items(), key=lambda x: x[1], reverse=True)])
-
-
-def _summarize_matches(matches: list) -> str:
-    """Create a summary of matched entities."""
-    if not matches:
-        return "No matches"
-    
-    match_types = {}
-    for match in matches[:10]:  # Top 10
-        t = match.get("type", "Unknown")
-        match_types[t] = match_types.get(t, 0) + 1
-    
-    return ", ".join([f"{k} ({v})" for k, v in sorted(match_types.items(), key=lambda x: x[1], reverse=True)])
 
 
 @router.post("/query", response_model=RAGQueryResponse)
@@ -725,6 +579,320 @@ def query_knowledge_base(
         collection=request.collection,
         use_llm=request.use_llm,
     )
+
+
+@router.post("/graph/nl-query", response_model=dict)
+def nl_graph_query(
+    query: str = Body(..., embed=True, min_length=5),
+    limit: int = Body(20, embed=True, ge=5, le=60),
+    rag_service: RAGService = Depends(get_rag_service),
+):
+    """
+    Natural language query over the knowledge base + knowledge graph.
+
+    Flow:
+      1. Query ChromaDB (semantic similarity) with the raw NL question.
+      2. Extract entity identifiers (technique IDs, playbook IDs, attack names)
+         from the ChromaDB results' metadata.
+      3. Query Neo4j for those specific entities and their 1-hop neighborhoods.
+      4. Build a comprehensive prompt (ChromaDB context + graph context) and
+         call Vertex AI (Gemini) for a structured SOC analyst answer.
+      5. Return: answer text + graph nodes/edges + focus_match + sources.
+
+    If Vertex AI is unavailable, the graph data is still returned with a note.
+    """
+    import re
+    nl_log = logging.getLogger("nl_graph_query")
+    nl_log.info(f"NL query received: {query[:80]}")
+
+    # ── 1. ChromaDB semantic search ──────────────────────────────────────────
+    chroma_results = []
+    if rag_service.chroma_client and rag_service.embedder:
+        for col_name in ["threat_intelligence", "behavioral_incidents"]:
+            try:
+                col = rag_service.chroma_client.get_collection(col_name)
+                emb = rag_service.embedder.encode(query).tolist()
+                res = col.query(query_embeddings=[emb], n_results=5)
+                if res.get("documents") and res["documents"][0]:
+                    for i, doc in enumerate(res["documents"][0]):
+                        meta = (res.get("metadatas") or [[]])[0][i] if res.get("metadatas") else {}
+                        dist = (res.get("distances") or [[1.0]])[0][i]
+                        chroma_results.append({
+                            "content": doc,
+                            "metadata": meta,
+                            "similarity": round(1.0 / (1.0 + dist), 3),
+                            "collection": col_name,
+                        })
+            except Exception as ce:
+                nl_log.warning(f"ChromaDB query failed for {col_name}: {ce}")
+
+        chroma_results.sort(key=lambda x: x["similarity"], reverse=True)
+        chroma_results = chroma_results[:8]
+        nl_log.info(f"ChromaDB returned {len(chroma_results)} results")
+
+    # ── 2. Extract entity identifiers from chroma metadata + query text ──────
+    # Collect candidate search terms: technique IDs, playbook IDs, attack names
+    entity_terms = set()
+
+    # From the raw query — regex for common ID patterns
+    entity_terms.update(re.findall(r'\bT\d{4}(?:\.\d{3})?\b', query, re.IGNORECASE))
+    entity_terms.update(re.findall(r'\bIR-[A-Z]+-\d+\b', query, re.IGNORECASE))
+    entity_terms.update(re.findall(r'\bIOC-[A-Z]+-\d+\b', query, re.IGNORECASE))
+
+    # From ChromaDB metadata
+    for r in chroma_results:
+        meta = r.get("metadata", {})
+        for field in ["technique_id", "playbook_id", "attack_name", "id"]:
+            val = meta.get(field)
+            if val and isinstance(val, str) and len(val) > 2:
+                entity_terms.add(val.strip())
+
+    # Also build a plain-text keyword set from meaningful words in the query
+    stop_words = {
+        'what', 'is', 'the', 'a', 'an', 'are', 'and', 'or', 'of', 'in', 'on', 'at',
+        'how', 'why', 'when', 'where', 'can', 'show', 'tell', 'find', 'me', 'for',
+        'to', 'with', 'from', 'by', 'this', 'that', 'it', 'as', 'about', 'give',
+        'list', 'all', 'any', 'my', 'do', 'does', 'did', 'has', 'have', 'been',
+        'which', 'who', 'their', 'there', 'then', 'than', 'into', 'onto', 'not',
+    }
+    kw_terms = [
+        w for w in query.lower().replace('-', ' ').split()
+        if len(w) > 3 and w not in stop_words
+    ]
+
+    nl_log.info(f"Entity terms: {entity_terms} | Keywords: {kw_terms[:6]}")
+
+    # ── 3. Neo4j graph query for found entities ───────────────────────────────
+    nodes: dict = {}
+    edges: dict = {}
+    focus_node_payload = None
+
+    try:
+        driver, session = _graph_session()
+        try:
+            # Build a combined keyword string from entity_terms + kw_terms
+            all_terms = list(entity_terms) + kw_terms
+            # Try each term and collect matching nodes; stop when we have a match
+            candidates = []
+            for term in all_terms[:12]:  # cap to avoid long loop
+                term_lower = term.lower()
+                term_rows = list(session.run(
+                    """
+                    MATCH (n)
+                    WHERE any(lbl IN labels(n) WHERE lbl IN
+                          ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                      AND (
+                        toLower(coalesce(n.name,        '')) CONTAINS $t
+                        OR toLower(coalesce(n.id,          '')) CONTAINS $t
+                        OR toLower(coalesce(n.technique_id, '')) CONTAINS $t
+                        OR toLower(coalesce(n.attack_name,  '')) CONTAINS $t
+                        OR toLower(coalesce(n.description,  '')) CONTAINS $t
+                      )
+                    RETURN n
+                    LIMIT 10
+                    """,
+                    t=term_lower,
+                ))
+                for rec in term_rows:
+                    n = rec.get("n")
+                    if n:
+                        p = _serialize_node(n)
+                        if p:
+                            candidates.append(p)
+
+            # De-duplicate by node id
+            seen = {}
+            for c in candidates:
+                if c["id"] not in seen:
+                    seen[c["id"]] = c
+            candidates = list(seen.values())
+            nl_log.info(f"Neo4j candidates: {len(candidates)}")
+
+            # Pick the best candidate as focus (prefer technique/playbook/pattern)
+            type_priority = {
+                "MITRETechnique": 5, "DetectionPattern": 4,
+                "Playbook": 3, "Window": 2, "User": 1,
+            }
+            if candidates:
+                candidates.sort(
+                    key=lambda c: type_priority.get(c.get("type", ""), 0),
+                    reverse=True,
+                )
+                focus_node_payload = candidates[0]
+
+            # Expand the focus node's 1-hop neighborhood
+            if focus_node_payload:
+                focus_type = focus_node_payload["type"]
+                focus_props = focus_node_payload.get("properties", {})
+                label_map = {
+                    "User": ("User", "name"),
+                    "Window": ("Window", "window_id"),
+                    "DetectionPattern": ("DetectionPattern", "id"),
+                    "MITRETechnique": ("MITRETechnique", "technique_id"),
+                    "Playbook": ("Playbook", "id"),
+                }
+                label, key_prop = label_map.get(focus_type, (focus_type, "id"))
+                key_value = focus_props.get(key_prop) or focus_props.get("id") or focus_props.get("name")
+
+                if key_value:
+                    neighbor_limit = max(30, min(limit * 4, 120))
+                    focus_rows = list(session.run(
+                        f"""
+                        MATCH (n:{label} {{{key_prop}: $kv}})-[r]-(m)
+                        RETURN n, m, r, startNode(r) as r_src, endNode(r) as r_dst
+                        LIMIT $nlimit
+                        """,
+                        kv=key_value,
+                        nlimit=neighbor_limit,
+                    ))
+                    for rec in focus_rows:
+                        _add_node(nodes, rec.get("n"))
+                        _add_node(nodes, rec.get("m"))
+                        _add_edge(edges, rec.get("r"), rec.get("r_src"), rec.get("r_dst"))
+
+                    nl_log.info(f"Focus node expanded: {len(nodes)} nodes, {len(edges)} edges")
+            else:
+                # No entity match — show a small overview
+                nl_log.info("No entity match — using overview graph")
+                ov_rows = list(session.run(
+                    """
+                    MATCH (n)
+                    WHERE any(lbl IN labels(n) WHERE lbl IN
+                          ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                    RETURN n LIMIT 40
+                    """
+                ))
+                for rec in ov_rows:
+                    _add_node(nodes, rec.get("n"))
+                ov_edge_rows = list(session.run(
+                    """
+                    MATCH (n)-[r]-(m)
+                    WHERE any(lbl IN labels(n) WHERE lbl IN
+                          ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                      AND any(lbl IN labels(m) WHERE lbl IN
+                          ['User','Window','DetectionPattern','MITRETechnique','Playbook'])
+                    RETURN n, r, m LIMIT 80
+                    """
+                ))
+                for rec in ov_edge_rows:
+                    _add_node(nodes, rec.get("n"))
+                    _add_node(nodes, rec.get("m"))
+                    _add_edge(edges, rec.get("r"), rec.get("n"), rec.get("m"))
+        finally:
+            session.close()
+            driver.close()
+
+    except Exception as ge:
+        nl_log.error(f"Neo4j query failed: {ge}", exc_info=True)
+
+    # ── 4. Build LLM prompt and generate answer ───────────────────────────────
+    answer = None
+    if rag_service.llm_handler:
+        try:
+            # Format ChromaDB context
+            ctx_parts = []
+            for i, r in enumerate(chroma_results[:6], 1):
+                meta = r.get("metadata", {})
+                src = meta.get("source", r.get("collection", "knowledge base"))
+                tid = meta.get("technique_id", "")
+                header = f"[Source {i}: {src}" + (f" | {tid}]" if tid else "]")
+                ctx_parts.append(f"{header}\n{r['content'][:600]}")
+            chroma_ctx = "\n\n".join(ctx_parts) if ctx_parts else "No ChromaDB results available."
+
+            # Format graph context
+            graph_ctx_parts = []
+            for node in list(nodes.values())[:15]:
+                props = node.get("properties", {})
+                name = props.get("name") or props.get("technique_id") or node.get("key", "")
+                desc = str(props.get("description", ""))[:200]
+                graph_ctx_parts.append(f"  - [{node['type']}] {name}: {desc}")
+            graph_ctx = "\n".join(graph_ctx_parts) if graph_ctx_parts else "No graph entities found."
+
+            edge_ctx_parts = []
+            for edge in list(edges.values())[:10]:
+                src_id = edge.get("source", "").split(":")[-1]
+                dst_id = edge.get("target", "").split(":")[-1]
+                edge_ctx_parts.append(f"  - {src_id} --[{edge.get('type', '?')}]--> {dst_id}")
+            edge_ctx = "\n".join(edge_ctx_parts) if edge_ctx_parts else "No relationships found."
+
+            prompt = f"""You are an expert AWS Cloud Security Operations Center (SOC) analyst.
+You have access to a security knowledge base and a knowledge graph of detected threats.
+Answer the analyst's question using ONLY the retrieved context below. Be specific, technical, and actionable.
+
+## KNOWLEDGE BASE (ChromaDB semantic search results):
+{chroma_ctx}
+
+## KNOWLEDGE GRAPH ENTITIES (Neo4j):
+{graph_ctx}
+
+## GRAPH RELATIONSHIPS:
+{edge_ctx}
+
+## ANALYST QUESTION:
+{query}
+
+## INSTRUCTIONS:
+- Answer based strictly on the context above. Do not hallucinate.
+- Reference specific MITRE technique IDs, playbook IDs, or detection pattern names where visible.
+- Structure your answer with clear sections using ### headers.
+- End with 2-3 concrete next steps the analyst should take right now.
+- If the context doesn't contain enough information, say so clearly and suggest what to search for.
+"""
+            nl_log.info("Calling Vertex AI for NL answer...")
+            answer = rag_service.llm_handler.generate_text_sync(
+                prompt=prompt,
+                temperature=0.2,
+                max_tokens=2500,
+                top_p=0.9,
+            )
+            nl_log.info(f"Vertex AI answer: {len(answer or '')} chars")
+        except Exception as le:
+            nl_log.error(f"LLM call failed: {le}", exc_info=True)
+            answer = None
+
+    # ── 5. Build response ─────────────────────────────────────────────────────
+    focus_match = None
+    if focus_node_payload:
+        focus_match = {
+            "id":      focus_node_payload["id"],
+            "type":    focus_node_payload["type"],
+            "key":     focus_node_payload["key"],
+            "label":   focus_node_payload["label"],
+            "context": _match_context(focus_node_payload["type"],
+                                      focus_node_payload.get("properties", {})),
+        }
+
+    sources = [
+        {
+            "content": r["content"][:300],
+            "collection": r["collection"],
+            "similarity": r["similarity"],
+            "metadata": r["metadata"],
+        }
+        for r in chroma_results[:5]
+    ]
+
+    if focus_match:
+        summary = (
+            f"Knowledge base + graph queried for: '{query}'. "
+            f"Best match: {focus_match['label']} ({focus_match['type']}). "
+            f"{len(nodes)} entities in subgraph."
+        )
+    else:
+        summary = (
+            f"Queried knowledge base for: '{query}'. "
+            f"Found {len(chroma_results)} relevant documents. "
+            f"No specific graph entity matched — showing graph overview."
+        )
+
+    return {
+        "answer":      answer,
+        "summary":     summary,
+        "sources":     sources,
+        "focus_match": focus_match,
+        "nodes":       list(nodes.values()),
+        "edges":       list(edges.values()),
+    }
 
 
 @router.get("/query", response_model=RAGQueryResponse)
@@ -792,11 +960,11 @@ def get_playbook_by_id(
 ):
     """Get specific playbook by ID (e.g., IR-IAM-001)"""
     playbooks = rag_service.get_playbooks()
-    
+
     for pb in playbooks:
         if pb.get("playbook_id") == playbook_id:
             return pb
-    
+
     raise HTTPException(status_code=404, detail=f"Playbook {playbook_id} not found")
 
 
@@ -820,7 +988,7 @@ def get_techniques(
     - `limit`: Maximum number of results
     """
     techniques = rag_service.get_techniques()
-    
+
     if not techniques:
         raise HTTPException(
             status_code=404,
@@ -844,11 +1012,11 @@ def get_technique_by_id(
 ):
     """Get specific MITRE technique by ID (e.g., T1078)"""
     techniques = rag_service.get_techniques()
-    
+
     for tech in techniques:
         if tech.get("technique_id") == technique_id:
             return tech
-    
+
     raise HTTPException(
         status_code=404,
         detail=f"Technique {technique_id} not found"
@@ -872,7 +1040,7 @@ def get_collections(
 
     collections = []
     collection_names = ["behavioral_incidents", "threat_intelligence"]
-    
+
     for name in collection_names:
         try:
             col = rag_service.chroma_client.get_collection(name)

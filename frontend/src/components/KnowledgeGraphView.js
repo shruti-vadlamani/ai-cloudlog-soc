@@ -225,7 +225,13 @@ function KnowledgeGraphView() {
   const [queryingGraph, setQueryingGraph] = useState(false);
   const [querySummary, setQuerySummary] = useState('');
   const [queryInsights, setQueryInsights] = useState([]);
-  const [queryExplanation, setQueryExplanation] = useState('');
+
+  // NL query state
+  const [nlQuery, setNlQuery] = useState('');
+  const [nlQuerying, setNlQuerying] = useState(false);
+  const [nlAnswer, setNlAnswer] = useState(null);
+  const [nlSummary, setNlSummary] = useState('');
+  const [nlSources, setNlSources] = useState([]);
 
   /*const demoQueries = useMemo(() => ([
     { label: 'Open T1078 credential compromise path', query: 'T1078' },
@@ -459,7 +465,6 @@ function KnowledgeGraphView() {
       mergeGraphData(await res.json());
       setQuerySummary('');
       setQueryInsights([]);
-      setQueryExplanation('');
       if (networkRef.current) {
         networkRef.current.fit({ animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
       }
@@ -689,7 +694,6 @@ function KnowledgeGraphView() {
 
       setQuerySummary(payload.summary || 'Graph query completed.');
       setQueryInsights(payload.insights || []);
-      setQueryExplanation(payload.explanation || '');
 
       if (networkRef.current) {
         networkRef.current.fit({ animation: { duration: 420, easingFunction: 'easeInOutQuad' } });
@@ -701,6 +705,10 @@ function KnowledgeGraphView() {
         const focusNode = nodesRef.current.get(focusMatchId);
         if (focusNode) {
           setSelectedNode(focusNode);
+          if (networkRef.current) {
+            networkRef.current.selectNodes([focusMatchId]);
+            networkRef.current.focus(focusMatchId, { animation: { duration: 320, easingFunction: 'easeInOutQuad' } });
+          }
           applyTraceHighlight(focusMatchId);
         }
       }
@@ -712,6 +720,56 @@ function KnowledgeGraphView() {
     }
   }, [applyTraceHighlight, graphQuery, initialLimit, mergeGraphData]);
 
+  const runNLQuery = useCallback(async () => {
+    const q = nlQuery.trim();
+    if (!q) return;
+    setNlQuerying(true);
+    setNlAnswer(null);
+    setNlSummary('');
+    setNlSources([]);
+    try {
+      const res = await fetch(apiUrl('/api/rag/graph/nl-query'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, limit: initialLimit }),
+      });
+      if (!res.ok) throw new Error('NL query failed');
+      const payload = await res.json();
+
+      // Re-render graph with relevant subgraph
+      nodesRef.current.clear();
+      edgesRef.current.clear();
+      mergeGraphData(payload);
+
+      setNlSummary(payload.summary || '');
+      setNlAnswer(payload.answer || null);
+      setNlSources(payload.sources || []);
+
+      if (networkRef.current) {
+        networkRef.current.fit({ animation: { duration: 420, easingFunction: 'easeInOutQuad' } });
+      }
+
+      // Select + zoom to best-match node
+      const fm = payload.focus_match;
+      if (fm && fm.id) {
+        const focusNode = nodesRef.current.get(fm.id);
+        if (focusNode) {
+          setSelectedNode(focusNode);
+          if (networkRef.current) {
+            networkRef.current.selectNodes([fm.id]);
+            networkRef.current.focus(fm.id, { animation: { duration: 320, easingFunction: 'easeInOutQuad' } });
+          }
+          applyTraceHighlight(fm.id);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      setNlAnswer('⚠️ Query failed. Check backend logs.');
+    } finally {
+      setNlQuerying(false);
+    }
+  }, [applyTraceHighlight, nlQuery, initialLimit, mergeGraphData]);
+
   useEffect(() => {
     fetchFilters().catch(console.error);
   }, [fetchFilters]);
@@ -719,6 +777,12 @@ function KnowledgeGraphView() {
   useEffect(() => {
     fetchInitialGraph();
   }, [fetchInitialGraph, selectedAlertKey]);
+
+  useEffect(() => {
+    if (selectedAttack || selectedTechnique) {
+      fetchInitialGraph();
+    }
+  }, [selectedAttack, selectedTechnique, fetchInitialGraph]);
 
   // Edge labels are always shown (relationship type) — no toggle effect needed
 
@@ -993,7 +1057,6 @@ function KnowledgeGraphView() {
               clearTraceHighlight();
               setQuerySummary('');
               setQueryInsights([]);
-              setQueryExplanation('');
             }}>
               Clear
             </button>
@@ -1008,12 +1071,12 @@ function KnowledgeGraphView() {
 
         <div className="graph-query-row">
           <label className="field" style={{ flex: 1 }}>
-            <span>Graph RAG Query</span>
+            <span>Keyword Search</span>
             <input
               type="text"
               value={graphQuery}
               onChange={(e) => setGraphQuery(e.target.value)}
-              placeholder="Example: show impossible travel patterns linked to T1078"
+              placeholder="Example: T1078, IR-IAM-004, impossible travel, privilege escalation"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
@@ -1022,7 +1085,7 @@ function KnowledgeGraphView() {
               }}
             />
           </label>
-          <button className="btn btn-primary" onClick={runGraphQuery} disabled={queryingGraph || !graphQuery.trim()}>
+          <button className="btn btn-primary" onClick={() => runGraphQuery()} disabled={queryingGraph || !graphQuery.trim()}>
             {queryingGraph ? 'Querying...' : 'Query Graph'}
           </button>
         </div>
@@ -1038,37 +1101,64 @@ function KnowledgeGraphView() {
           </div>
         )}
 
-        {queryExplanation && (
-          <div style={{
-            marginTop: '2rem',
-            padding: '1.5rem',
-            borderRadius: '0.5rem',
-            width: '100%',
-            boxSizing: 'border-box'
+        {/* ── Natural Language Query ───────────────────────────── */}
+        <div className="graph-query-row" style={{ marginTop: '0.75rem', borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem' }}>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Natural Language Query <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 400 }}>— ask a question, Gemini answers using knowledge base + graph</span></span>
+            <input
+              type="text"
+              value={nlQuery}
+              onChange={(e) => setNlQuery(e.target.value)}
+              placeholder="e.g. What playbooks cover IAM privilege escalation? How is T1078 detected?"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); runNLQuery(); }
+              }}
+            />
+          </label>
+          <button
+            className="btn btn-primary"
+            onClick={() => runNLQuery()}
+            disabled={nlQuerying || !nlQuery.trim()}
+            style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', border: 'none' }}
+          >
+            {nlQuerying ? 'Thinking…' : '✦ Ask AI'}
+          </button>
+        </div>
+
+        {/* NL answer panel */}
+        {(nlAnswer || nlSummary) && (
+          <div className="nl-answer-panel" style={{
+            marginTop: '0.75rem',
+            background: 'linear-gradient(135deg, #f8f6ff 0%, #f0f4ff 100%)',
+            border: '1px solid #c4b5fd',
+            borderRadius: '0.6rem',
+            padding: '1rem 1.25rem',
           }}>
-            <div style={{
-              fontSize: '1rem',
-              fontWeight: 600,
-              color: '#10b981',
-              marginBottom: '1rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}>
-              🤖 AI-Powered Graph Analysis
-            </div>
-            <div style={{
-              color: '#000000',
-              lineHeight: '1.8',
-              fontSize: '0.95rem',
-              wordWrap: 'break-word',
-              overflowWrap: 'break-word',
-              whiteSpace: 'normal',
-              overflow: 'visible',
-              maxHeight: 'none',
-              maxWidth: '100%'
-            }} dangerouslySetInnerHTML={{ __html: markdownToHtml(queryExplanation) }}>
-            </div>
+            {nlSummary && (
+              <p style={{ margin: '0 0 0.6rem', fontSize: '0.8rem', color: '#7c3aed', fontWeight: 600 }}>
+                {nlSummary}
+              </p>
+            )}
+            {nlAnswer && (
+              <div
+                style={{ fontSize: '0.875rem', color: '#1e1b4b', lineHeight: 1.7 }}
+                dangerouslySetInnerHTML={{ __html: markdownToHtml(nlAnswer) }}
+              />
+            )}
+            {nlSources.length > 0 && (
+              <details style={{ marginTop: '0.75rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#6d28d9', fontWeight: 600 }}>
+                  Sources ({nlSources.length})
+                </summary>
+                <ul style={{ marginTop: '0.4rem', paddingLeft: '1rem', fontSize: '0.75rem', color: '#475569' }}>
+                  {nlSources.map((s, i) => (
+                    <li key={i} style={{ marginBottom: '0.3rem' }}>
+                      <strong>{s.collection}</strong> — similarity {s.similarity} — {s.content.slice(0, 120)}…
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </div>
         )}
       </div>
